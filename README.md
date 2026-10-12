@@ -180,11 +180,20 @@ with an empty state while no run is active.
   host→client shape the shipped plan-mode and goal plugins use. Because it
   is a session projection, resume and fork restore the progress view.
 - **Registration** (client half, `client.js`): one tab type through
-  `ctx.sidebarRightTabs.register({ id, kind, priority, title })` (the public
-  two-stage path; the tab opens by kind like the shipped guide tab), plus
-  the body and chip occupants in the `sidebar.right.pane.tab` /
-  `sidebar.right.pane.tab.title` slots. Occupants receive the framework's
-  `useTabInfo` hook plus this plugin's `useFactoryState` hook.
+  `ctx.sidebarRightTabs.register({ id, kind, priority, title, guide })` —
+  the public two-stage path every shipped tab type uses. The `guide` entry
+  is what makes the tab reachable: a page type without `patterns` opens
+  only by kind, and the guide capsule (plus the strip's add control) is the
+  shipped way a user opens one — picking it calls `openTab('factory')`.
+  The body and chip occupants register in the keyed
+  `sidebar.right.pane.tab` / `sidebar.right.pane.tab.title` seats under the
+  type id. The body's `inject(sessionId)` returns a face whose
+  `hooks.factoryState` value is the projection face itself — an observable
+  snapshot source (`{ getSnapshot, subscribe }`) that the shipped renderer
+  binds into the `useFactoryState(selector)` selector hook; the chip
+  receives the framework's `useTabInfo` hook. A session without the
+  projection reads as an `undefined` snapshot and renders the
+  "progress unavailable" state.
 - **Styling**: theme tokens only (`--dsw-alias-*`, `--dsw-radius-*`,
   `--dsw-font-mono`); React from the browser module table; no Harness
   client package is imported.

@@ -172,8 +172,13 @@ function emptyProjectionState() {
 function foldStatusLine(state, n, key, text, rawLine) {
   if (PHASES[n - 1].key !== key) return state;
   let phases = state.phases.map((phase) => ({ ...phase }));
-  // A phase-1 line after a finished run starts a fresh run.
-  if (n === 1 && !state.running && phases[0].status !== 'pending') {
+  // A phase-1 line always opens a run: reset every stale phase unless the
+  // board is already pristine (the first line ever, or right after a reset).
+  // Gating on `!state.running` would miss a board abandoned mid-run by a
+  // failure (only a phase-8 line settles `running`), whose stale rows would
+  // then survive into the next run — the done-closure below never rewrites
+  // a `failed` phase.
+  if (n === 1 && phases[0].status !== 'pending') {
     phases = emptyProjectionState().phases;
   }
   // Progression: entering phase n closes every earlier open phase as done.
@@ -230,7 +235,10 @@ function validateProjectionState(input) {
  */
 const factoryProjectionDefinition = {
   key: FACTORY_PROJECTION_KEY,
-  stateVersion: 1,
+  // v2: a phase-1 line now resets the board unconditionally (v1 gated the
+  // reset on `!running`, so a run abandoned mid-failure kept its stale rows
+  // and a `failed` phase survived into the next run).
+  stateVersion: 2,
   stateSchema: { parse: validateProjectionState },
   init: () => emptyProjectionState(),
   apply: (state, event) => {
