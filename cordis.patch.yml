@@ -1,0 +1,11 @@
+# dsh-software-factory bundle patch: one Host plugin row.
+#
+# Every config key is optional. Safe defaults: all phases enabled except
+# deploy, which stays off until both `deploy.enabled: true` and a non-empty
+# `deploy.command` are set. Override this row by id in a later patch layer
+# (profile cordis.patch.yml); remember a matching override replaces `config`
+# wholesale, so restate every field you need.
+- insert:
+    - id: software-factory
+      name: '@local/dsh-software-factory'
+      config: {}

@@ -1,0 +1,34 @@
+{
+  "name": "@local/dsh-software-factory",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Adds the /factory slash command: a managed 8-phase software-delivery pipeline (capture, plan, implement, guardrails, test, deploy, regression, evaluate) driven through DSH-native machinery, with a right-sidebar progress tab in the Web client.",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "AGENTS.md"
+  ],
+  "icon": "./icon.svg",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-sidebar-right"
+      ]
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Software Factory",
+    "description": "Adds the /factory command: an 8-phase managed software-delivery pipeline (capture, plan, implement, guardrails, test, optional deploy, regression, evaluate) driven through DSH-native tools."
+  }
+}
