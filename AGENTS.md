@@ -1,7 +1,7 @@
 # AGENTS.md
 
 This repository holds `@local/dsh-software-factory`, a DSH (DeepSeek Harness)
-Host plugin bundle: the `/factory` slash command, an 8-phase software-delivery
+Host plugin bundle: the `/factory` slash command, a 9-phase software-delivery
 pipeline driven through DSH-native machinery, plus a Web-client right-sidebar
 tab that observes pipeline progress.
 

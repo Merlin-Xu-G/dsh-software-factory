@@ -2,7 +2,7 @@
  * @local/dsh-software-factory — Client half (Web platform).
  *
  * Registers the "Factory" right-sidebar tab: a compact panel listing the
- * eight pipeline phases with live status, plus the latest narration line.
+ * nine pipeline phases with live status, plus the latest narration line.
  * State comes from the Host's `factory` session projection, read through the
  * shipped session binding's projection store
  * (`ctx.sessions.binding(id).session.projections.faceOf('factory')`); no
@@ -38,6 +38,16 @@
  *   binding and absence reads as an `undefined` snapshot (capability
  *   absent), so the projection face itself is a valid hook source; the body
  *   distinguishes "progress projection not loaded" from "no run yet".
+ * - Auto-open: the plugin body subscribes to `ctx.sidebarRight.mounted` (the
+ *   on-screen Session observable) and, per mounted session, to its `factory`
+ *   projection face; a live `runCount` increment (the Host fold counts
+ *   `/factory` command runs into the wire view) calls
+ *   `ctx.sidebarRight.openTab('factory')`, which also expands the column.
+ *   The open is gated by the wire view's `autoOpen` flag (the plugin row
+ *   config `autoOpenTab`, default on; absent means enabled).
+ *   Baselines are never treated as starts — connects, replays, and session
+ *   switches open nothing — and a run in a session that is not on screen is
+ *   ignored, because the tab shows the on-screen session's progress.
  * - Styling: one injected `<style data-plugin-css>` tag, theme tokens only
  *   (`--dsw-alias-*`, `--dsw-radius-*`, `--dsw-font-mono`); React comes from
  *   the browser module table; no Harness client package is imported.
@@ -55,6 +65,8 @@ window.__ModuleLoader__.load({
 		const NS = 'softwareFactory';
 		/** The tab type's identity: the key its body and chip register under. */
 		const TAB_ID = '@local/dsh-software-factory/factory-tab';
+		/** The page kind this type opens by (guide capsules and `openTab` use it). */
+		const TAB_KIND = 'factory';
 		/** The Host projection key (must equal FACTORY_PROJECTION_KEY in index.js). */
 		const PROJECTION_KEY = 'factory';
 		/** Status values the Host projection emits. */
@@ -98,9 +110,9 @@ window.__ModuleLoader__.load({
 		/** Chinese dictionary (source of truth). */
 		const zh = {
 			'tab.title': '工厂',
-			'guide.description': '在侧栏跟踪 /factory 八阶段交付流水线的实时进度。',
+			'guide.description': '在侧栏跟踪 /factory 九阶段交付流水线的实时进度。',
 			'empty.none': '当前没有正在运行的工厂流水线',
-			'empty.hint': '输入 /factory <需求> 启动 8 阶段交付流水线。',
+			'empty.hint': '输入 /factory <需求> 启动 9 阶段交付流水线。',
 			'empty.unavailable': '进度不可用（未加载进度投影）。',
 			'last.label': '最新状态',
 			'status.pending': '待执行',
@@ -112,9 +124,9 @@ window.__ModuleLoader__.load({
 		/** English dictionary, key-identical to the Chinese source of truth. */
 		const en = {
 			'tab.title': 'Factory',
-			'guide.description': "Track a /factory run's live 8-phase delivery progress in the sidebar.",
+			'guide.description': "Track a /factory run's live 9-phase delivery progress in the sidebar.",
 			'empty.none': 'No active factory run',
-			'empty.hint': 'Type /factory <request> to start the 8-phase delivery pipeline.',
+			'empty.hint': 'Type /factory <request> to start the 9-phase delivery pipeline.',
 			'empty.unavailable': 'Progress unavailable (progress projection not loaded).',
 			'last.label': 'Latest status',
 			'status.pending': 'pending',
@@ -178,7 +190,7 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
-		 * The tab body: eight phase rows with live status, the latest narration
+		 * The tab body: nine phase rows with live status, the latest narration
 		 * line verbatim, and a quiet empty state when nothing runs. The
 		 * framework binds `hooks.factoryState` (this occupant's inject face)
 		 * into the `useFactoryState(selector)` selector hook; `t` comes from the
@@ -209,7 +221,7 @@ window.__ModuleLoader__.load({
 						key: phase.key,
 					},
 					h(StatusDot, { status }),
-					h('span', { className: 'dsf-num' }, `${phase.n}/8`),
+					h('span', { className: 'dsf-num' }, `${phase.n}/9`),
 					h('span', { className: 'dsf-key' }, phase.key),
 					h('span', {
 						className: 'dsf-text',
@@ -223,12 +235,63 @@ window.__ModuleLoader__.load({
 					: null);
 		}
 
-		/** Required client services: the tab-type registry, slots, copy, sessions. */
-		const inject = ['sidebarRightTabs', 'slots', 'locale', 'sessions'];
+		/** Required client services: the tab-type registry, the navigation
+		 * controller (auto-open), slots, copy, sessions. */
+		const inject = ['sidebarRightTabs', 'sidebarRight', 'slots', 'locale', 'sessions'];
+
+		/**
+		 * Auto-open watcher: subscribe to the on-screen Session observable and,
+		 * per mounted session, to its `factory` projection face. A live
+		 * `runCount` increment against a numeric baseline means a `/factory`
+		 * command just ran in the session the user is looking at — open the
+		 * tab (which also expands the column), unless the wire view's
+		 * `autoOpen` is explicitly `false` (the plugin row config's
+		 * `autoOpenTab` switch, default on; an absent field — an older Host —
+		 * means enabled). A baseline read or a session
+		 * switch only (re-)baselines, so connects, replays, and history never
+		 * open anything; a run in a session that is not on screen is ignored
+		 * because the tab shows the on-screen session's progress.
+		 * @param {import('@deepseek-ai/cordis').Context} ctx client root context.
+		 * @returns {() => void} cleanup.
+		 */
+		function watchFactoryStarts(ctx) {
+			const mounted = ctx.sidebarRight.mounted;
+			let stopFace = () => {};
+			const runCountOf = (view) => (typeof view?.runCount === 'number' ? view.runCount : undefined);
+			const rebaseline = () => {
+				stopFace();
+				stopFace = () => {};
+				const sessionId = mounted.getSnapshot();
+				if (sessionId === undefined) return;
+				const face = ctx.sessions.binding(sessionId)?.session?.projections?.faceOf(PROJECTION_KEY);
+				if (face === undefined) return;
+				let baseline = runCountOf(face.getSnapshot());
+				stopFace = face.subscribe(() => {
+					const view = face.getSnapshot();
+					const current = runCountOf(view);
+					if (baseline !== undefined && current !== undefined && current > baseline
+						&& view.autoOpen !== false) {
+						try {
+							ctx.sidebarRight.openTab(TAB_KIND);
+						} catch (error) {
+							console.error('software-factory: auto-open failed:', error);
+						}
+					}
+					baseline = current;
+				});
+			};
+			const stopMounted = mounted.subscribe(rebaseline);
+			rebaseline();
+			return () => {
+				stopMounted();
+				stopFace();
+			};
+		}
 
 		/**
 		 * Client plugin body: register the dictionaries, the tab type with its
-		 * guide entry, and the tab body + title occupants; return their disposal.
+		 * guide entry, the tab body + title occupants, and the auto-open
+		 * watcher; return their disposal.
 		 * @param {import('@deepseek-ai/cordis').Context} ctx client root context.
 		 * @returns {() => void} cleanup.
 		 */
@@ -237,7 +300,7 @@ window.__ModuleLoader__.load({
 			const t = ctx.locale.bind(NS);
 			ctx.effect(() => ctx.sidebarRightTabs.register({
 				id: TAB_ID,
-				kind: 'factory',
+				kind: TAB_KIND,
 				priority: 'extension',
 				title: () => t('tab.title'),
 				guide: [{
@@ -248,6 +311,7 @@ window.__ModuleLoader__.load({
 					icon: FactoryGlyph,
 				}],
 			}), 'software-factory: tab type');
+			ctx.effect(() => watchFactoryStarts(ctx), 'software-factory: auto-open on run start');
 			const disposeBody = ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({
 				name: 'sidebar.right.pane.tab',
 				key: TAB_ID,
