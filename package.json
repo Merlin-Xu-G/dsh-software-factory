@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-software-factory",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "description": "Adds the /factory slash command: a managed 9-phase software-delivery pipeline (capture, plan, implement, review, guardrails, test, deploy, regression, evaluate) driven through DSH-native machinery, with a right-sidebar progress tab in the Web client.",
@@ -12,6 +12,7 @@
   },
   "files": [
     "index.js",
+    "lib/*.js",
     "client.js",
     "cordis.patch.yml",
     "locale/*.json",
