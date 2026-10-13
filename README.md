@@ -1,7 +1,7 @@
 # dsh-software-factory
 
 A DSH (DeepSeek Harness) Host plugin bundle that adds the **`/factory <request>`**
-slash command: a managed software-delivery pipeline with exactly eight phases,
+slash command: a managed software-delivery pipeline with exactly nine phases,
 executed by the session's agent through DSH-native machinery.
 
 ```
@@ -15,21 +15,22 @@ a short success text. The agent runs the pipeline and narrates progress with
 compact per-phase status lines such as:
 
 ```
-[factory] phase 3/8 implement: 3 tasks done
+[factory] phase 3/9 implement: 3 tasks done
 ```
 
-## The eight phases
+## The nine phases
 
 | # | Key | Phase | Driven by |
 |---|-----|-------|-----------|
 | 1 | `capture` | Capture the request | restate goal, deliverables, constraints; derive acceptance criteria; ask only on material ambiguity |
 | 2 | `plan` | Plan the tasks | the session's planning facilities: todo list (one todo per task), or `exit_plan_mode` in plan mode; each task names its write scope |
 | 3 | `implement` | Implement the tasks | file tools (read/edit/write); for larger scopes, one subagent per task with disjoint write scopes |
-| 4 | `guardrails` | Run guardrails (lint, typecheck, format check) | configured commands via the shell tool; long runs as background jobs; non-zero exit = failure |
-| 5 | `test` | Test the implementation | configured test commands the same way, plus local/manual checks where possible |
-| 6 | `deploy` | Deploy to a test environment | **only** when `deploy.enabled` and `deploy.command` are configured; otherwise explicitly skipped |
-| 7 | `regression` | Run regression tests | the configured regression suite; regressions compared against phase-5 results |
-| 8 | `evaluate` | Evaluate and report | evaluate against the original request; summarize evidence and limitations; present deliverables |
+| 4 | `review` | Review the implementation | re-read the full diff against the plan; defect, security, debug-code, and dead-code pass; verify no task was quietly deferred; fix findings before guardrails |
+| 5 | `guardrails` | Run guardrails (lint, typecheck, format check) | configured commands via the shell tool; long runs as background jobs; non-zero exit = failure |
+| 6 | `test` | Test the implementation | configured test commands the same way, plus local/manual checks where possible |
+| 7 | `deploy` | Deploy to a test environment | **only** when `deploy.enabled` and `deploy.command` are configured; otherwise explicitly skipped |
+| 8 | `regression` | Run regression tests | the configured regression suite; regressions compared against phase-6 results |
+| 9 | `evaluate` | Evaluate and report | evaluate against the original request; summarize evidence and limitations; present deliverables |
 
 Enabled phases may not be skipped: failures are fixed and retried within the
 phase, or reported honestly. Disabled phases are still announced with a
@@ -55,7 +56,8 @@ dependencies, install scripts, or build tools.
 ## Configuration
 
 All keys are optional. Defaults: **every phase enabled except deploy** (deploy
-stays off until both `deploy.enabled` is true and a `deploy.command` is set).
+stays off until both `deploy.enabled` is true and a `deploy.command` is set)
+and **the Factory tab auto-opens** when a run starts.
 
 ```yaml
 - id: software-factory
@@ -63,11 +65,13 @@ stays off until both `deploy.enabled` is true and a `deploy.command` is set).
   config:
     plan: true                    # phase 2 toggle
     implement: true               # phase 3 toggle
-    guardrails: true              # phase 4 toggle
-    test: true                    # phase 5 toggle
-    regression: true              # phase 7 toggle
-    evaluate: true                # phase 8 toggle
+    review: true                  # phase 4 toggle
+    guardrails: true              # phase 5 toggle
+    test: true                    # phase 6 toggle
+    regression: true              # phase 8 toggle
+    evaluate: true                # phase 9 toggle
     subagentImplementation: true  # prefer per-task subagent delegation in phase 3
+    autoOpenTab: true             # auto-open the Factory sidebar tab when a run starts
     guardrailCommand: 'npm run lint'        # string or array of strings
     testCommand: ['npm run typecheck', 'npm test']
     regressionCommand: 'npm run test:e2e'
@@ -80,6 +84,9 @@ Notes:
 
 - Command fields accept one string or an array of non-empty strings; each
   entry runs as its own shell invocation in phase order.
+- `autoOpenTab` controls the Web client's auto-open only; the tab itself (and
+  its guide entry) stays available either way. Set `autoOpenTab: false` to
+  keep the sidebar untouched by `/factory` runs.
 - Unknown config keys fail at plugin activation (typos never silently
   disable a phase).
 - A later patch layer overriding this row replaces `config` wholesale —
@@ -107,6 +114,7 @@ Full example (`.factory.yml` at the repository root):
 phases:
   plan: true
   implement: true
+  review: true
   guardrails: true
   test: true
   regression: false      # this repo has no regression suite yet
@@ -145,12 +153,12 @@ subset — anything else is a loud, named error:
   `phases:` and `phasePrompts:`.
 - Nested entries at one consistent indentation (spaces only),
   `key: value` on a single line.
-- `phases.<key>` ∈ `plan | implement | guardrails | test | regression |
-  evaluate`, value exactly `true` or `false` (`yes`/`True` are errors — be
-  explicit).
-- `phasePrompts.<key>` ∈ `plan | implement | guardrails | test | deploy |
-  regression | evaluate` (note: no `capture` — phase 1 is the request
-  itself), value a string in one of these forms:
+- `phases.<key>` ∈ `plan | implement | review | guardrails | test |
+  regression | evaluate`, value exactly `true` or `false` (`yes`/`True` are
+  errors — be explicit).
+- `phasePrompts.<key>` ∈ `plan | implement | review | guardrails | test |
+  deploy | regression | evaluate` (note: no `capture` — phase 1 is the
+  request itself), value a string in one of these forms:
   - plain scalar — rest of the line, trimmed; a trailing ` # comment` is
     stripped;
   - `'single quoted'` (only escape: `''` → `'`) or `"double quoted"`
@@ -167,24 +175,44 @@ subset — anything else is a loud, named error:
 ## Right-sidebar progress tab (Web client)
 
 The Web client gains a **Factory** tab in the right sidebar. It lists the
-eight phases with live status (pending / active / done / skipped / failed),
+nine phases with live status (pending / active / done / skipped / failed),
 shows the latest `[factory] phase …` narration line verbatim, and sits quiet
 with an empty state while no run is active.
 
 - **State source**: the Host's `factory` session projection folds
   `assistant/message` session-log events, matching ONLY lines that start
   with the plugin's own narration contract
-  (`[factory] phase <n>/8 <key>: <status>`). The wire view reaches the
-  client through the shipped session binding
+  (`[factory] phase <n>/9 <key>: <status>`), and counts each `/factory`
+  `command/run` into a monotonic `runCount` on the same wire view. The wire
+  view reaches the client through the shipped session binding
   (`sessions.binding(id).session.projections.faceOf('factory')`) — the same
   host→client shape the shipped plan-mode and goal plugins use. Because it
   is a session projection, resume and fork restore the progress view.
 - **Registration** (client half, `client.js`): one tab type through
-  `ctx.sidebarRightTabs.register({ id, kind, priority, title })` (the public
-  two-stage path; the tab opens by kind like the shipped guide tab), plus
-  the body and chip occupants in the `sidebar.right.pane.tab` /
-  `sidebar.right.pane.tab.title` slots. Occupants receive the framework's
-  `useTabInfo` hook plus this plugin's `useFactoryState` hook.
+  `ctx.sidebarRightTabs.register({ id, kind, priority, title, guide })` —
+  the public two-stage path every shipped tab type uses. The `guide` entry
+  is what makes the tab reachable: a page type without `patterns` opens
+  only by kind, and the guide capsule (plus the strip's add control) is the
+  shipped way a user opens one — picking it calls `openTab('factory')`.
+  The body and chip occupants register in the keyed
+  `sidebar.right.pane.tab` / `sidebar.right.pane.tab.title` seats under the
+  type id. The body's `inject(sessionId)` returns a face whose
+  `hooks.factoryState` value is the projection face itself — an observable
+  snapshot source (`{ getSnapshot, subscribe }`) that the shipped renderer
+  binds into the `useFactoryState(selector)` selector hook; the chip
+  receives the framework's `useTabInfo` hook. A session without the
+  projection reads as an `undefined` snapshot and renders the
+  "progress unavailable" state.
+- **Auto-open**: running `/factory` opens the tab by itself. The client
+  watches the on-screen session's `factory` face (via
+  `ctx.sidebarRight.mounted`, the shipped on-screen-session observable) and
+  calls the shipped `ctx.sidebarRight.openTab('factory')` — which also
+  expands the column — when `runCount` increments live. Baselines never
+  open anything, so connects, replays, and session switches stay quiet, and
+  a run in a session you are not looking at is ignored (the tab shows the
+  on-screen session's progress). The `autoOpenTab` plugin config (default
+  on) gates the open — it travels in the projection's wire view (`autoOpen`),
+  so there is no separate client-side setting.
 - **Styling**: theme tokens only (`--dsw-alias-*`, `--dsw-radius-*`,
   `--dsw-font-mono`); React from the browser module table; no Harness
   client package is imported.
@@ -237,7 +265,10 @@ with an empty state while no run is active.
   `schema.parse(...)`. Fold semantics: entering phase n closes earlier open
   phases as done; `skip` in the text marks the phase skipped;
   `fail`/`error`/`blocked` marks it failed; a phase-8 line ends the run; a
-  later phase-1 line starts a fresh run.
+  later phase-1 line starts a fresh run; `command/run` events naming this
+  command bump the monotonic `runCount` (the auto-open signal), and the wire
+  view carries the row config's `autoOpenTab` switch as `autoOpen` so the
+  client honors the same declarative configuration.
 - **Locale**: `locale/en.json` + `locale/zh.json` carry the Plugin Manager
   title/description; `icon.svg` is the card icon; the client tab registers
   its own `softwareFactory` dictionary with the client locale service.

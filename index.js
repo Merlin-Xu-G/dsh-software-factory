@@ -4,7 +4,7 @@
  * Registers the `/factory <request>` human command. The command steers one
  * model-visible user message into the receiving agent (the same mechanism
  * `@deepseek-ai/dsh-plan-mode` uses for `/plan [message]`): a structured
- * pipeline prompt for the 8 delivery phases below, followed by the user's
+ * pipeline prompt for the 9 delivery phases below, followed by the user's
  * request. The agent then executes the pipeline with DSH-native machinery —
  * todo/plan facilities, file tools, optional subagent delegation, the shell
  * tool, and background jobs — while narrating one compact status line per
@@ -12,10 +12,15 @@
  *
  * Progress observability: the `factory` session projection folds the
  * session log's `assistant/message` events, matching ONLY lines that start
- * with the plugin's own narration contract (`[factory] phase <n>/8 <key>:
- * <status>`), and publishes a wire view per session. The Web client half
- * (client.js, right-sidebar tab) reads it through the shipped session
- * binding (`sessions.binding(id).session.projections.faceOf('factory')`) —
+ * with the plugin's own narration contract (`[factory] phase <n>/9 <key>:
+ * <status>`), and publishes a wire view per session. The same fold counts
+ * `command/run` events that name this command into a monotonic `runCount`,
+ * which the client watches to auto-open its tab when a run starts live; the
+ * wire view also carries the row config's `autoOpenTab` switch (default on)
+ * so that auto-open honors the same declarative configuration. The
+ * Web client half (client.js, right-sidebar tab) reads the wire view through
+ * the shipped session binding
+ * (`sessions.binding(id).session.projections.faceOf('factory')`) —
  * the same host→client shape the shipped plan-mode and goal plugins use.
  * The projection is registered through the optional `sessionProjections`
  * service, so profiles without it keep the command fully functional.
@@ -31,7 +36,7 @@
  * files: `agent.session.header.cwd ?? process.cwd()` for the root, then the
  * optional `fs` service (`ctx.get('fs')`: `resolve(path, { cwd, signal })` →
  * `stat(target, signal)` → `readText(target, signal)`) with a `node:fs`
- * fallback when the service is absent. The file may override the six phase
+ * fallback when the service is absent. The file may override the seven phase
  * toggles and append per-phase prompt text (see `parseFactoryYml`); the
  * plugin row Config stays the global default layer and keeps command lists
  * and the deploy gate to itself. A missing file changes nothing; an invalid
@@ -64,15 +69,16 @@ import { readFile as nodeReadFile, stat as nodeStat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 /**
- * The fixed pipeline identity: eight phases, in order. `key` is the slug used
+ * The fixed pipeline identity: nine phases, in order. `key` is the slug used
  * in status lines; `toggle` names the Config boolean that enables the phase
- * (phase 1 capture is the request itself and is always enabled; phase 6
+ * (phase 1 capture is the request itself and is always enabled; phase 7
  * deploy is additionally gated on a configured deploy command).
  */
 const PHASES = [
   { key: 'capture', name: 'Capture the request', toggle: null },
   { key: 'plan', name: 'Plan the tasks', toggle: 'plan' },
   { key: 'implement', name: 'Implement the tasks', toggle: 'implement' },
+  { key: 'review', name: 'Review the implementation', toggle: 'review' },
   { key: 'guardrails', name: 'Run guardrails', toggle: 'guardrails' },
   { key: 'test', name: 'Test the implementation', toggle: 'test' },
   { key: 'deploy', name: 'Deploy to test environment', toggle: 'deploy' },
@@ -83,6 +89,7 @@ const PHASES = [
 const TOP_LEVEL_KEYS = new Set([
   'plan',
   'implement',
+  'review',
   'guardrails',
   'test',
   'deploy',
@@ -92,6 +99,7 @@ const TOP_LEVEL_KEYS = new Set([
   'testCommand',
   'regressionCommand',
   'subagentImplementation',
+  'autoOpenTab',
 ]);
 
 /** The per-project file this plugin reads from the session workspace root. */
@@ -101,6 +109,7 @@ const PROJECT_FILE_NAME = '.factory.yml';
 const PROJECT_TOGGLE_KEYS = new Set([
   'plan',
   'implement',
+  'review',
   'guardrails',
   'test',
   'regression',
@@ -111,6 +120,7 @@ const PROJECT_TOGGLE_KEYS = new Set([
 const PROJECT_PROMPT_KEYS = new Set([
   'plan',
   'implement',
+  'review',
   'guardrails',
   'test',
   'deploy',
@@ -136,19 +146,21 @@ const FACTORY_PROJECTION_KEY = 'factory';
  * unrelated text (including tool output echoing the prompt) can never be
  * misparsed as progress.
  */
-const STATUS_LINE_PATTERN = /^\[factory\] phase ([1-8])\/8 ([a-z]+): (.*)$/;
+const STATUS_LINE_PATTERN = /^\[factory\] phase ([1-9])\/9 ([a-z]+): (.*)$/;
 
 /** Phase statuses the projection tracks. */
 const PHASE_STATUSES = new Set(['pending', 'active', 'done', 'skipped', 'failed']);
 
 /**
- * Build the initial projection state: eight pending phases, no run.
+ * Build the initial projection state: nine pending phases, no run.
  * @returns {{running: boolean, phases: {n: number, key: string,
  *   status: string, text: string | null}[], lastLine: string | null}}
  */
 function emptyProjectionState() {
   return {
     running: false,
+    /** Monotonic count of `/factory` command runs in the log (auto-open signal). */
+    runCount: 0,
     phases: PHASES.map((phase, index) => ({
       n: index + 1,
       key: phase.key,
@@ -163,7 +175,7 @@ function emptyProjectionState() {
  * Fold one narration line into a fresh state (or the same reference when
  * nothing changes). Deterministic and clock-free: replay-safe.
  * @param {ReturnType<emptyProjectionState>} state current state.
- * @param {number} n phase number from the line (1-8).
+ * @param {number} n phase number from the line (1-9).
  * @param {string} key phase key from the line.
  * @param {string} text status text after the colon.
  * @param {string} rawLine the full verbatim line.
@@ -172,8 +184,13 @@ function emptyProjectionState() {
 function foldStatusLine(state, n, key, text, rawLine) {
   if (PHASES[n - 1].key !== key) return state;
   let phases = state.phases.map((phase) => ({ ...phase }));
-  // A phase-1 line after a finished run starts a fresh run.
-  if (n === 1 && !state.running && phases[0].status !== 'pending') {
+  // A phase-1 line always opens a run: reset every stale phase unless the
+  // board is already pristine (the first line ever, or right after a reset).
+  // Gating on `!state.running` would miss a board abandoned mid-run by a
+  // failure (only a phase-8 line settles `running`), whose stale rows would
+  // then survive into the next run — the done-closure below never rewrites
+  // a `failed` phase.
+  if (n === 1 && phases[0].status !== 'pending') {
     phases = emptyProjectionState().phases;
   }
   // Progression: entering phase n closes every earlier open phase as done.
@@ -192,6 +209,7 @@ function foldStatusLine(state, n, key, text, rawLine) {
   const final = phases[PHASES.length - 1].status;
   return {
     running: final !== 'done' && final !== 'failed' && final !== 'skipped',
+    runCount: state.runCount,
     phases,
     lastLine: rawLine,
   };
@@ -203,6 +221,9 @@ function validateProjectionState(input) {
     throw new Error('factory projection state must be an object');
   }
   if (typeof input.running !== 'boolean') throw new Error('factory projection state "running" must be a boolean');
+  if (!Number.isSafeInteger(input.runCount) || input.runCount < 0) {
+    throw new Error('factory projection state "runCount" must be a non-negative integer');
+  }
   if (!Array.isArray(input.phases) || input.phases.length !== PHASES.length) {
     throw new Error(`factory projection state "phases" must be an array of ${PHASES.length} entries`);
   }
@@ -220,46 +241,74 @@ function validateProjectionState(input) {
   return input;
 }
 
+/** Assert-and-return the projection wire view: the state shape plus `autoOpen`. */
+function validateWireView(input) {
+  const state = validateProjectionState(input);
+  if (typeof input.autoOpen !== 'boolean') {
+    throw new Error('factory projection wire view "autoOpen" must be a boolean');
+  }
+  return state;
+}
+
 /**
  * The factory progress projection. The session-projection registry only
  * calls `schema.parse(...)` on state and wire values, so the schemas below
  * are dependency-free `{ parse }` facades (the same trick as `Config`'s
  * `~standard`, one protocol level up). The wire view reaches the Web client
  * through the shipped session binding (`projections.faceOf('factory')`) —
- * the exact host→client shape plan-mode and goal use.
+ * the exact host→client shape plan-mode and goal use. It also carries the
+ * row config's `autoOpenTab` switch (default on) so the client's auto-open
+ * honors the same declarative configuration; it is a view-time constant,
+ * not folded state, so no stateVersion bump.
+ * @param {boolean} autoOpenTab whether the Web client auto-opens its tab on a run start.
+ * @returns {object} the projection definition to register.
  */
-const factoryProjectionDefinition = {
-  key: FACTORY_PROJECTION_KEY,
-  stateVersion: 1,
-  stateSchema: { parse: validateProjectionState },
-  init: () => emptyProjectionState(),
-  apply: (state, event) => {
-    if (event.type !== 'assistant/message') return state;
-    const content = event.data?.message?.content;
-    if (!Array.isArray(content)) return state;
-    const text = content
-      .filter((block) => block?.type === 'text' && typeof block.text === 'string')
-      .map((block) => block.text)
-      .join('\n');
-    let next = state;
-    for (const line of text.split('\n')) {
-      const trimmed = line.trim();
-      if (trimmed === '') continue;
-      const match = STATUS_LINE_PATTERN.exec(trimmed);
-      if (!match) continue;
-      next = foldStatusLine(next, Number(match[1]), match[2], match[3], trimmed);
-    }
-    return next;
-  },
-  wire: {
-    viewSchema: { parse: validateProjectionState },
-    view: (state) => ({
-      running: state.running,
-      phases: state.phases.map((phase) => ({ ...phase })),
-      lastLine: state.lastLine,
-    }),
-  },
-};
+function buildFactoryProjectionDefinition(autoOpenTab) {
+  return {
+    key: FACTORY_PROJECTION_KEY,
+    // v4: nine-phase identity — `review` inserted between implement and
+    // guardrails, so every phase number from 4 on shifted and the narration
+    // contract reads `<n>/9` (old `/8` lines no longer match, so boards of
+    // past runs fold as pristine). v3 added the `runCount` command-run
+    // counter; v2 made a phase-1 line reset the board unconditionally.
+    stateVersion: 4,
+    stateSchema: { parse: validateProjectionState },
+    init: () => emptyProjectionState(),
+    apply: (state, event) => {
+      // A `/factory` invocation (dsh-commands logs `{ commandId, name, source }`
+      // before the handler runs; `args` is absent because recordInput is false).
+      if (event.type === 'command/run' && event.data?.name === 'factory') {
+        return { ...state, runCount: state.runCount + 1 };
+      }
+      if (event.type !== 'assistant/message') return state;
+      const content = event.data?.message?.content;
+      if (!Array.isArray(content)) return state;
+      const text = content
+        .filter((block) => block?.type === 'text' && typeof block.text === 'string')
+        .map((block) => block.text)
+        .join('\n');
+      let next = state;
+      for (const line of text.split('\n')) {
+        const trimmed = line.trim();
+        if (trimmed === '') continue;
+        const match = STATUS_LINE_PATTERN.exec(trimmed);
+        if (!match) continue;
+        next = foldStatusLine(next, Number(match[1]), match[2], match[3], trimmed);
+      }
+      return next;
+    },
+    wire: {
+      viewSchema: { parse: validateWireView },
+      view: (state) => ({
+        running: state.running,
+        runCount: state.runCount,
+        autoOpen: autoOpenTab,
+        phases: state.phases.map((phase) => ({ ...phase })),
+        lastLine: state.lastLine,
+      }),
+    },
+  };
+}
 
 /**
  * Recursively freeze plain data (arrays/objects) in place, mirroring the
@@ -318,9 +367,11 @@ function readCommands(raw, name, fallback) {
  * phase.
  *
  * @param {unknown} input raw row config; `{}`/`undefined` selects defaults.
- * @returns {Readonly<{plan: boolean, implement: boolean, guardrails: boolean,
+ * @returns {Readonly<{plan: boolean, implement: boolean, review: boolean,
+ *   guardrails: boolean,
  *   test: boolean, regression: boolean, evaluate: boolean,
- *   subagentImplementation: boolean, deploy: {enabled: boolean, command: readonly string[]},
+ *   subagentImplementation: boolean, autoOpenTab: boolean,
+ *   deploy: {enabled: boolean, command: readonly string[]},
  *   guardrailCommand: readonly string[], testCommand: readonly string[],
  *   regressionCommand: readonly string[]}>}
  */
@@ -346,11 +397,13 @@ function resolveConfig(input) {
   return Object.freeze({
     plan: readBoolean(raw, 'plan', true),
     implement: readBoolean(raw, 'implement', true),
+    review: readBoolean(raw, 'review', true),
     guardrails: readBoolean(raw, 'guardrails', true),
     test: readBoolean(raw, 'test', true),
     regression: readBoolean(raw, 'regression', true),
     evaluate: readBoolean(raw, 'evaluate', true),
     subagentImplementation: readBoolean(raw, 'subagentImplementation', true),
+    autoOpenTab: readBoolean(raw, 'autoOpenTab', true),
     deploy: Object.freeze({
       enabled: readBoolean(deployRaw, 'enabled', false),
       command: readCommands(deployRaw, 'command', []),
@@ -689,6 +742,7 @@ export function applyProjectOverrides(resolved, project) {
     ...resolved,
     plan: phases.plan ?? resolved.plan,
     implement: phases.implement ?? resolved.implement,
+    review: phases.review ?? resolved.review,
     guardrails: phases.guardrails ?? resolved.guardrails,
     test: phases.test ?? resolved.test,
     regression: phases.regression ?? resolved.regression,
@@ -706,22 +760,22 @@ export function applyProjectOverrides(resolved, project) {
  */
 function buildPipelinePrompt(resolved, request) {
   const lines = [];
-  lines.push('# Software factory — 8-phase delivery pipeline');
+  lines.push('# Software factory — 9-phase delivery pipeline');
   lines.push('');
   lines.push(
-    'You are running the software-factory pipeline. Work through the eight phases below strictly in order, for the user request stated at the end of this message. The pipeline is executed with DSH-native machinery only — the session\'s real tools and logs are the record of the run.',
+    'You are running the software-factory pipeline. Work through the nine phases below strictly in order, for the user request stated at the end of this message. The pipeline is executed with DSH-native machinery only — the session\'s real tools and logs are the record of the run.',
   );
   lines.push('');
   lines.push('Ground rules:');
   lines.push('');
   lines.push(
-    '- Emit one compact status line when you ENTER each phase (with your intent) and one when you LEAVE it (with the outcome), in exactly this form: `[factory] phase <n>/8 <key>: <short status>` — for example `[factory] phase 3/8 implement: 3 tasks done`.',
+    '- Emit one compact status line when you ENTER each phase (with your intent) and one when you LEAVE it (with the outcome), in exactly this form: `[factory] phase <n>/9 <key>: <short status>` — for example `[factory] phase 3/9 implement: 3 tasks done`.',
   );
   lines.push(
     '- Never skip an enabled phase. If a phase fails, fix and retry within that phase; if it truly cannot pass, stop and report the failure honestly instead of moving on silently.',
   );
   lines.push(
-    '- A disabled phase is still announced: `[factory] phase <n>/8 <key>: skipped (disabled by configuration)`.',
+    '- A disabled phase is still announced: `[factory] phase <n>/9 <key>: skipped (disabled by configuration)`.',
   );
   lines.push(
     '- Report command results honestly: a non-zero exit code is a failure, whatever the output looks like. Quote exit codes.',
@@ -740,12 +794,12 @@ function buildPipelinePrompt(resolved, request) {
     const phase = PHASES[index];
     const number = index + 1;
     lines.push('');
-    lines.push(`## Phase ${number}/8 — ${phase.key}: ${phase.name}`);
+    lines.push(`## Phase ${number}/9 — ${phase.key}: ${phase.name}`);
     if (!enabled(phase)) {
       if (phase.key === 'deploy') {
         lines.push('');
         lines.push(
-          '- Skipped: no test environment is configured (`deploy.enabled` is false, or no `deploy.command` is set). Announce `[factory] phase 6/8 deploy: skipped (no test environment configured)` and move on. Do not invent a deployment.',
+          '- Skipped: no test environment is configured (`deploy.enabled` is false, or no `deploy.command` is set). Announce `[factory] phase 7/9 deploy: skipped (no test environment configured)` and move on. Do not invent a deployment.',
         );
       } else {
         lines.push('');
@@ -775,6 +829,12 @@ function buildPipelinePrompt(resolved, request) {
           lines.push('- Subagent delegation is disabled by configuration (`subagentImplementation: false`): implement directly with the file tools.');
         }
         break;
+      case 'review':
+        lines.push('- Review the implementation before guardrails: re-read the complete diff of every changed file against the planned tasks and their write scopes.');
+        lines.push('- Look for what the automated phases cannot catch: wrong or missing task logic, unhandled error paths, security issues (injection, secret leaks, unsafe deserialization), leftover debug code, and dead code.');
+        lines.push('- Verify each planned task is actually implemented and nothing was quietly deferred; note anything you consciously leave for later.');
+        lines.push('- Fix what you find now and re-check the fix; report what you reviewed, what you found, and what you changed.');
+        break;
       case 'guardrails': {
         const list = renderCommandList(resolved.guardrailCommand);
         if (list !== '') {
@@ -802,7 +862,7 @@ function buildPipelinePrompt(resolved, request) {
         const list = renderCommandList(resolved.deploy.command);
         lines.push('- A test environment IS configured; deploy to it with the shell tool:');
         lines.push(list);
-        lines.push('- Treat the deploy command\'s non-zero exit as a phase failure. If the command includes a smoke/verification step, include its evidence in phase 8.');
+        lines.push('- Treat the deploy command\'s non-zero exit as a phase failure. If the command includes a smoke/verification step, include its evidence in phase 9.');
         break;
       }
       case 'regression': {
@@ -821,7 +881,7 @@ function buildPipelinePrompt(resolved, request) {
         lines.push('- Summarize the verification evidence: every command run with its exit status, suites that passed, and what was verified manually.');
         lines.push('- State limitations honestly: what was not tested, known risks, and any deferred work.');
         lines.push('- Present the deliverables (changed files and produced artifacts) as a clear list.');
-        lines.push('- Finish with the final status line: `[factory] phase 8/8 evaluate: <verdict>`.');
+        lines.push('- Finish with the final status line: `[factory] phase 9/9 evaluate: <verdict>`.');
         break;
       default:
         break;
@@ -875,12 +935,12 @@ function createPipelineMessage(content) {
 export function apply(ctx, config) {
   const resolved = resolveConfig(config);
   const projectionFiber = ctx.inject(['sessionProjections'], (projectionCtx) => {
-    return projectionCtx.sessionProjections.register(factoryProjectionDefinition);
+    return projectionCtx.sessionProjections.register(buildFactoryProjectionDefinition(resolved.autoOpenTab));
   });
   const fiber = ctx.inject(['commands'], (commandCtx) => {
     return commandCtx.commands.register({
       name: 'factory',
-      description: 'Run the 8-phase software-factory delivery pipeline on a request',
+      description: 'Run the 9-phase software-factory delivery pipeline on a request',
       input: {
         hint: '<request>',
         attachments: true,
@@ -922,8 +982,8 @@ export function apply(ctx, config) {
         return {
           kind: 'success',
           text: projectApplied
-            ? `Factory pipeline started — 8 phases in order; ${PROJECT_FILE_NAME} overrides applied. Watch for [factory] phase lines in the conversation.`
-            : 'Factory pipeline started — 8 phases in order; watch for [factory] phase lines in the conversation.',
+            ? `Factory pipeline started — 9 phases in order; ${PROJECT_FILE_NAME} overrides applied. Watch for [factory] phase lines in the conversation.`
+            : 'Factory pipeline started — 9 phases in order; watch for [factory] phase lines in the conversation.',
         };
       },
     });
