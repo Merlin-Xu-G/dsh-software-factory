@@ -760,7 +760,7 @@ export function applyProjectOverrides(resolved, project) {
  */
 function buildPipelinePrompt(resolved, request) {
   const lines = [];
-  lines.push('# Software factory — 8-phase delivery pipeline');
+  lines.push('# Software factory — 9-phase delivery pipeline');
   lines.push('');
   lines.push(
     'You are running the software-factory pipeline. Work through the nine phases below strictly in order, for the user request stated at the end of this message. The pipeline is executed with DSH-native machinery only — the session\'s real tools and logs are the record of the run.',
@@ -940,7 +940,7 @@ export function apply(ctx, config) {
   const fiber = ctx.inject(['commands'], (commandCtx) => {
     return commandCtx.commands.register({
       name: 'factory',
-      description: 'Run the 8-phase software-factory delivery pipeline on a request',
+      description: 'Run the 9-phase software-factory delivery pipeline on a request',
       input: {
         hint: '<request>',
         attachments: true,
