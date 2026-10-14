@@ -275,11 +275,23 @@ with an empty state while no run is active.
 
 ## Repository layout
 
+The Host half is split into one domain module per file under `lib/`; the
+entry (`index.js`) only wires them together. The Web half must stay one
+self-contained bundle file (the client-modules contract makes a plugin
+bundle a single module node whose imports may only be module-table leaves),
+organized internally by section.
+
 ```
 package.json        manifest: @local/dsh-software-factory, dsh.bundle.patch + dsh.client
 cordis.patch.yml    insert row `software-factory`
-index.js            Host half: Config schema + /factory command + .factory.yml reader
-                    + `factory` session projection
+index.js            Host half entry: re-exports Config + parser, wires the
+                    command and projection fibers
+lib/phases.js       pipeline identity: ordered phases, statuses, narration pattern
+lib/config.js       plugin row Config (~standard facade, unknown-key rejection, deploy gate)
+lib/projection.js   `factory` session projection: fold, schema facades, wire view
+lib/project-file.js `.factory.yml` parser + workspace-root reader + override merge
+lib/prompt.js       the steered pipeline prompt builder
+lib/command.js      dsh-commands definition + immutable steered message
 client.js           Web half: right-sidebar Factory tab over the projection wire view
 locale/en.json      display metadata (English)
 locale/zh.json      display metadata (Chinese)

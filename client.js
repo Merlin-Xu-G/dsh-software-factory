@@ -8,6 +8,13 @@
  * (`ctx.sessions.binding(id).session.projections.faceOf('factory')`); no
  * plugin-owned transport.
  *
+ * One file on purpose: the client-modules contract makes a plugin bundle a
+ * single module node whose imports may only be module-table leaves (`react`)
+ * — relative-import chunks are compiler-generated machinery, not safe to
+ * hand-author — so this bundle cannot be split like the Host half's `lib/`.
+ * Internal order: constants, CSS, dictionaries, glyph + status markers,
+ * title/body components, auto-open watcher, plugin body.
+ *
  * Contracts coded against (verified against the shipped client sources
  * extracted from the installed Harness: @deepseek-ai/dsh-client-ui-sidebar-right,
  * -jobs, -plan, -goal, dsh-client-ui-renderer, dsh-api-session-controller):

@@ -9,11 +9,18 @@ tab that observes pipeline progress.
 
 - `package.json` — bundle manifest (`dsh.bundle.patch`, `dsh.client` web section).
 - `cordis.patch.yml` — the single Loader insert row (`id: software-factory`).
-- `index.js` — Host half: Config schema (Standard Schema `~standard`), the
-  `/factory` command, the `.factory.yml` project-override reader, and the
-  `factory` session projection that derives progress from the session log.
+- `index.js` — Host half entry: re-exports the Config schema (Standard Schema
+  `~standard`) and the `.factory.yml` parser, and wires the `/factory`
+  command and `factory` session projection fibers.
+- `lib/` — Host half domain modules, one per file: `phases.js` (pipeline
+  identity), `config.js` (row Config + deploy gate), `projection.js`
+  (session projection fold + wire view), `project-file.js` (`.factory.yml`
+  parser/reader/merge), `prompt.js` (pipeline prompt), `command.js`
+  (dsh-commands definition + steered message).
 - `client.js` — Web half (ModuleLoader factory): the right-sidebar "Factory"
-  tab over the projection's wire view.
+  tab over the projection's wire view. Must stay one self-contained file —
+  a plugin bundle is a single module node whose imports may only be
+  module-table leaves.
 - `locale/en.json`, `locale/zh.json` — Plugin Manager display metadata.
 - `icon.svg` — card icon. `README.md` — full documentation, including the
   `.factory.yml` format.
