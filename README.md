@@ -18,6 +18,11 @@ compact per-phase status lines such as:
 [factory] phase 3/9 implement: 3 tasks done
 ```
 
+## Compatibility
+
+- Minimum DSH: `>=0.2.0-rc.2` — declared in `package.json` → `engines.dsh`. DSH enforces this floor at install/activation and matches prerelease versions, so it never blocks a newer DSH.
+- Latest tested DSH: `0.2.1-rc.2` — recorded in `package.json` → `dsh.latestTestedDshVersion`. Descriptive only; DSH does not enforce it.
+
 ## The nine phases
 
 | # | Key | Phase | Driven by |
