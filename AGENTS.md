@@ -24,12 +24,15 @@ tab that observes pipeline progress.
 - `locale/en.json`, `locale/zh.json` — Plugin Manager display metadata.
 - `icon.svg` — card icon. `README.md` — full documentation, including the
   `.factory.yml` format.
+- `test/` — behavioral test suite (`npm test`): `smoke.mjs` (client + host
+  halves against stubbed environments) and `prompt-equivalence.mjs` (prompt
+  snapshot against `test/prompt-baseline.md`).
 
 ## Conventions
 
 - **Verification bar**: every change ends with `node --check` on each touched
-  `.js` file plus a behavioral smoke run (see `.tmp` scratch in the settings
-  repo); quote the real outputs in the report. Never claim success without
+  `.js` file plus a behavioral smoke run (`npm test` in this repository);
+  quote the real outputs in the report. Never claim success without
   same-turn on-disk evidence.
 - **No agent git commits** in this repository. The user and the Lead review;
   they commit. Do not run `plugin_manager` here either: installation happens

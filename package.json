@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Adds the /factory slash command: a managed 9-phase software-delivery pipeline (capture, plan, implement, review, guardrails, test, deploy, regression, evaluate) driven through DSH-native machinery, with a right-sidebar progress tab in the Web client.",
+  "scripts": {
+    "test": "node test/smoke.mjs && node test/prompt-equivalence.mjs"
+  },
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
