@@ -74,12 +74,15 @@ const rendered = out.join('\n');
 
 if (process.argv[2] === undefined) {
   const baselinePath = new URL('./prompt-baseline.md', import.meta.url);
-  const baseline = readFileSync(baselinePath, 'utf8');
-  if (rendered === baseline) {
+  // Normalize CRLF before comparing: a fresh checkout with core.autocrlf=true
+  // materializes the committed baseline with CRLF while the builder renders LF.
+  const baseline = readFileSync(baselinePath, 'utf8').replace(/\r\n/g, '\n');
+  const normalizedRendered = rendered.replace(/\r\n/g, '\n');
+  if (normalizedRendered === baseline) {
     console.log(`prompt snapshot PASS (${scenarios.length} scenarios, byte-identical to test/prompt-baseline.md)`);
     process.exit(0);
   }
-  const renderedLines = rendered.split('\n');
+  const renderedLines = normalizedRendered.split('\n');
   const baselineLines = baseline.split('\n');
   let firstDiff = -1;
   for (let i = 0; i < Math.max(renderedLines.length, baselineLines.length); i += 1) {
