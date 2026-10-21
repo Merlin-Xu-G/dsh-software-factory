@@ -27,8 +27,8 @@ compact per-phase status lines such as:
 
 | # | Key | Phase | Driven by |
 |---|-----|-------|-----------|
-| 1 | `capture` | Capture the request | restate goal, deliverables, constraints; derive acceptance criteria; ask only on material ambiguity |
-| 2 | `plan` | Plan the tasks | the session's planning facilities: todo list (one todo per task), or `exit_plan_mode` in plan mode; each task names its write scope |
+| 1 | `capture` | Capture the request | restate goal, deliverables, constraints; grill mode (default): unbounded `ask_user_question` batches across a fixed checklist until every dimension has the user's explicit answer (`grill: false` falls back to ask-only-when-ambiguous) |
+| 2 | `plan` | Plan the tasks | a DETAILED plan for long runs: the session's planning facilities (todo list, or `exit_plan_mode` in plan mode), one todo per task naming goal, write scope, verification, and dependencies |
 | 3 | `implement` | Implement the tasks | file tools (read/edit/write); for larger scopes, one subagent per task with disjoint write scopes |
 | 4 | `review` | Review the implementation | re-read the full diff against the plan; defect, security, debug-code, and dead-code pass; verify no task was quietly deferred; fix findings before guardrails |
 | 5 | `guardrails` | Run guardrails (lint, typecheck, format check) | configured commands via the shell tool; long runs as background jobs; non-zero exit = failure |
@@ -77,6 +77,8 @@ and **the Factory tab auto-opens** when a run starts.
     evaluate: true                # phase 9 toggle
     subagentImplementation: true  # prefer per-task subagent delegation in phase 3
     autoOpenTab: true             # auto-open the Factory sidebar tab when a run starts
+    grill: true                   # interview the user (unbounded batches) before planning
+    queueConcurrency: 3           # max simultaneously running queue workers
     guardrailCommand: 'npm run lint'        # string or array of strings
     testCommand: ['npm run typecheck', 'npm test']
     regressionCommand: 'npm run test:e2e'
@@ -92,6 +94,10 @@ Notes:
 - `autoOpenTab` controls the Web client's auto-open only; the tab itself (and
   its guide entry) stays available either way. Set `autoOpenTab: false` to
   keep the sidebar untouched by `/factory` runs.
+- `grill: false` restores ask-only-when-materially-ambiguous behavior; the
+  detailed-plan requirements of phase 2 stay on either way.
+- `queueConcurrency` is the queue's concurrent worker cap (see the queue
+  section below); a positive integer.
 - Unknown config keys fail at plugin activation (typos never silently
   disable a phase).
 - A later patch layer overriding this row replaces `config` wholesale —
@@ -225,11 +231,56 @@ with an empty state while no run is active.
   to a detail page listing the run's whole plan — every todo with its live
   status — followed by a back control returning to the phase list. A run
   without a recorded plan shows an explicit empty state on that page.
+- **Queue subpage**: a Queue button (present in every body state) opens the
+  global factory queue — see the next section.
 - **Styling**: theme tokens only (`--dsw-alias-*`, `--dsw-radius-*`,
   `--dsw-font-mono`); React from the browser module table; no Harness
   client package is imported.
 - **Visibility**: client text is English constants + a Chinese dictionary
   registered with the client locale service (namespace `softwareFactory`).
+
+## The factory queue
+
+Long, unattended work runs through one **global queue** shared by every
+session, executed by **worker sessions** the plugin itself starts:
+
+```
+/factory -q Build the retention pipeline      # or --queue
+/factory queue                                # queue status text
+/factory queue ack [id]                       # acknowledge a halt and resume
+```
+
+- **Grill at enqueue**: `-q` first asks one structural batch (target
+  workspace, write scopes, summary, notes) through the question composer,
+  then steers an **enqueue interview** into the session — the same unbounded
+  grilling as an interactive run. The interview ends with one
+  `[factory] enqueue: {json}` line; the plugin's host listener turns it into
+  a queue item (idempotent per session event, so replays never duplicate).
+- **Workers are root sessions**: each item runs in its own agent session in
+  the item's workspace (visible in the sidebar, titled
+  `Factory queue <id>: <summary>`, with its own live Factory tab), steered
+  with the autonomous pipeline prompt — the clarification answers are
+  binding, and the worker never asks. The worker workspace's own
+  `.factory.yml` applies; an invalid one fails the item loudly.
+- **Scheduling**: FIFO with the `queueConcurrency` cap (default 3) and
+  write-scope blocking — an item does not start while a running item's
+  scopes overlap it in the same workspace (whole-workspace scopes conflict
+  with everything there; different workspaces never conflict).
+- **Failure halts the queue** (the configured policy): the item is marked
+  failed with its reason, nothing new starts, and the queue page shows a
+  halt banner until you run `/factory queue ack [id]` — the failed item
+  stays failed, the rest resume.
+- **Durability**: the queue is a JSON document under
+  `$DSH_HOME/factory-queue/queue.json`, written atomically on every change;
+  after a restart, items left running are re-queued (their orphaned worker
+  sessions stay in the sidebar) and scheduling resumes.
+- **Queue UI**: the Factory tab's Queue page (from any body state) polls the
+  plugin's read-only same-origin route
+  `/plugins/@local/dsh-software-factory/queue.json` (the shipped
+  client-hmr route pattern) and lists every item — status, scopes, failure
+  reason, halt banner with the ack hint. Acknowledgement is a command, so
+  the route never mutates state. Worker verdicts come from each worker's own
+  `factory` projection board, read host-side — no new status channel.
 
 ## Design notes
 
@@ -299,13 +350,16 @@ organized internally by section.
 package.json        manifest: @local/dsh-software-factory, dsh.bundle.patch + dsh.client
 cordis.patch.yml    insert row `software-factory`
 index.js            Host half entry: re-exports Config + parser, wires the
-                    command and projection fibers
+                    command, projection, queue (store + runtime + route), and
+                    the enqueue listener fibers
 lib/phases.js       pipeline identity: ordered phases, statuses, narration pattern
 lib/config.js       plugin row Config (~standard facade, unknown-key rejection, deploy gate)
 lib/projection.js   `factory` session projection: fold, schema facades, wire view
 lib/project-file.js `.factory.yml` parser + workspace-root reader + override merge
-lib/prompt.js       the steered pipeline prompt builder
-lib/command.js      dsh-commands definition + immutable steered message
+lib/prompt.js       pipeline prompt builder (grill / autonomous / default modes)
+lib/command.js      dsh-commands definition + steered message + enqueue directive
+lib/queue.js        global durable queue store (scope blocking, cap, halt/ack)
+lib/orchestrator.js queue runtime: worker sessions + verdicts + status text
 client.js           Web half: right-sidebar Factory tab over the projection wire view
 locale/en.json      display metadata (English)
 locale/zh.json      display metadata (Chinese)

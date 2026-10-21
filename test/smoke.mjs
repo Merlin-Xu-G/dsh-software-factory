@@ -70,6 +70,10 @@ const stubReact = {
 		const cell = hookStore[slot];
 		return [cell.value, (next) => { cell.value = typeof next === 'function' ? next(cell.value) : next; }];
 	},
+	useEffect(effect) {
+		const cleanup = effect();
+		return typeof cleanup === 'function' ? cleanup : undefined;
+	},
 };
 const requiredSpecifiers = [];
 const stubRequire = (specifier) => {
@@ -284,6 +288,45 @@ faces['session-1'].set(liveView);
 resetHooks();
 hookStore.length = 0;
 
+// Queue page: nav button opens it from any body state; it polls the Host's
+// read-only route (fetch stubbed) and renders items, halt banner, and back.
+let queueSnapshot = { halted: false, items: [
+	{ id: 'q1', status: 'succeeded', summary: 'Retention pipeline', scopes: ['src/retention/'] },
+	{ id: 'q2', status: 'running', summary: 'Sidebar bug', scopes: [] },
+	{ id: 'q3', status: 'failed', summary: 'Broken thing', scopes: ['src/x/'], failureReason: 'phase 5/9 guardrails failed' },
+] };
+globalThis.fetch = (url) => {
+	eq('client: queue page polls the plugin route', url, '/plugins/@local/dsh-software-factory/queue.json');
+	return Promise.resolve({ json: () => Promise.resolve(queueSnapshot) });
+};
+const listTree2 = flatten(renderBody(faces['session-1']));
+const queueNav = listTree2.find((node) => typeof node === 'object' && node.props.className === 'dsf-navButton');
+check('client: queue nav button present in the phase list', queueNav?.type === 'button' && typeof queueNav?.props.onClick === 'function');
+queueNav.props.onClick();
+flatten(renderBody(faces['session-1'])); // the effect fires (and fetches) during this render
+await new Promise((resolve) => { setTimeout(resolve, 20); }); // data lands in the hook cell
+const queueTree = flatten(renderBody(faces['session-1']));
+check('client: queue page lists every item with status',
+	queueTree.includes('t:queue.title') && queueTree.includes('Retention pipeline')
+	&& queueTree.includes('Sidebar bug') && queueTree.includes('Broken thing')
+	&& queueTree.includes('phase 5/9 guardrails failed'));
+check('client: running queue item highlighted',
+	queueTree.some((node) => typeof node === 'object' && node.props.className === 'dsf-queueRow dsf-planRowActive'));
+queueSnapshot = { halted: true, haltedBy: 'q3', items: queueSnapshot.items };
+await new Promise((resolve) => { setTimeout(resolve, 20); });
+const haltedTree = flatten(renderBody(faces['session-1']));
+check('client: halt banner and ack hint render',
+	haltedTree.includes('t:queue.halted') && haltedTree.includes('t:queue.ackHint'));
+const queueBack = haltedTree.find((node) => typeof node === 'object' && node.props.className === 'dsf-back');
+check('client: queue page has a back control', queueBack?.type === 'button' && typeof queueBack?.props.onClick === 'function');
+queueBack.props.onClick();
+check('client: back returns to the phase list',
+	flatten(renderBody(faces['session-1'])).some((node) => typeof node === 'object'
+		&& typeof node.props.className === 'string' && node.props.className.startsWith('dsf-list')));
+faces['session-1'].set(liveView);
+resetHooks();
+hookStore.length = 0;
+
 const initialFace = { getSnapshot: () => ({ running: false, phases: Array.from({ length: 9 }, (_, i) => ({ n: i + 1, key: `p${i}`, status: 'pending', text: null })), lastLine: null }), subscribe: () => () => {} };
 const emptyTree = flatten(renderBody(initialFace));
 check('client: pristine session renders the empty state', emptyTree.includes('t:empty.none'));
@@ -327,10 +370,12 @@ clientCleanup();
 const host = await import(pathToFileURL(join(repoRoot, 'index.js')).href);
 
 const defaults = host.Config['~standard'].validate(undefined).value;
-eq('host: config defaults (phases on, deploy off, auto-open on)', [
+eq('host: config defaults (phases on, deploy off, auto-open and grill on, queue 3)', [
 	defaults.plan, defaults.implement, defaults.review, defaults.guardrails, defaults.test, defaults.regression, defaults.evaluate,
-	defaults.deploy.enabled, defaults.deploy.command.length, defaults.autoOpenTab,
-], [true, true, true, true, true, true, true, false, 0, true]);
+	defaults.deploy.enabled, defaults.deploy.command.length, defaults.autoOpenTab, defaults.grill, defaults.queueConcurrency,
+], [true, true, true, true, true, true, true, false, 0, true, true, 3]);
+const badGrill = host.Config['~standard'].validate({ queueConcurrency: 0 });
+check('host: queueConcurrency must be a positive integer', badGrill.issues?.[0]?.message?.includes('queueConcurrency') === true);
 const badConfig = host.Config['~standard'].validate({ planing: true });
 check('host: unknown config key reported as an issue', badConfig.issues?.[0]?.message?.includes('planing') === true);
 
@@ -353,6 +398,12 @@ eq('host: project overrides win for toggles and attach prompts', [merged.test, m
 let projectionDef = null;
 let commandDef = null;
 const projectionDefs = [];
+const sessionEventHandlers = [];
+// The queue store must not touch the real DSH home: point the env at a temp
+// dir before apply() creates the store.
+const queueHome = mkdtempSync(join(tmpdir(), 'factory-queue-home-'));
+const previousDshHome = process.env.DSH_HOME;
+process.env.DSH_HOME = queueHome;
 const fakeHostCtx = {
 	inject(deps, callback) {
 		if (deps.includes('sessionProjections')) {
@@ -362,6 +413,12 @@ const fakeHostCtx = {
 		}
 		return { dispose() {} };
 	},
+	on(event, handler) {
+		if (event === 'session/event') sessionEventHandlers.push(handler);
+		return () => {};
+	},
+	get() { return undefined; },
+	logger: { warn() {} },
 };
 host.apply(fakeHostCtx, {});
 check('host: projection registered through optional sessionProjections', projectionDef !== null);
@@ -370,7 +427,7 @@ eq('host: command definition', [
 	commandDef?.name, commandDef?.description, commandDef?.input, commandDef?.recordInput,
 ], [
 	'factory', 'Run the 9-phase software-factory delivery pipeline on a request',
-	{ hint: '<request>', attachments: true }, false,
+	{ hint: '[-q|--queue] <request> | queue [ack [id]]', attachments: true }, false,
 ]);
 
 const assistantEvent = (seq, text) => ({
@@ -505,6 +562,79 @@ const viewOff = defOff.wire.view(defOff.init({}, 0));
 defOff.wire.viewSchema.parse(viewOff);
 defOff.stateSchema.parse(defOff.init({}, 0));
 eq('host: autoOpenTab=false flows into the wire view as autoOpen false', viewOff.autoOpen, false);
+
+// ---------------------------------------------------------------------------
+// Queue store: the durable state machine over a temp dir.
+// ---------------------------------------------------------------------------
+const storeDir = mkdtempSync(join(tmpdir(), 'factory-queue-store-'));
+const store = host.createQueueStore({ dir: storeDir });
+const itemA = await store.enqueue({ request: 'Build the retention pipeline', workspace: '/repo/a', scopes: ['src/retention/'] });
+const itemB = await store.enqueue({ request: 'Fix the sidebar bug', workspace: '/repo/a', scopes: ['src/sidebar/'] });
+const itemC = await store.enqueue({ request: 'Same-area change', workspace: '/repo/a', scopes: ['src/retention/deep/'] });
+const itemD = await store.enqueue({ request: 'Other repo change', workspace: '/repo/b', scopes: ['src/'] });
+eq('host: queue: enqueue assigns FIFO ids', [itemA.id, itemB.id, itemC.id, itemD.id], ['q1', 'q2', 'q3', 'q4']);
+await store.markRunning(itemA.id, 'worker-aaaa');
+eq('host: queue: overlapping scope blocks, other workspace passes', [
+	(await store.pickNext(3))?.id, (await store.markRunning(itemB.id, 'worker-bbbb'), await store.pickNext(3))?.id,
+], [itemB.id, itemD.id]);
+eq('host: queue: concurrency cap respected', (await store.pickNext(2)) === null, true);
+await store.markSucceeded(itemA.id);
+eq('host: queue: freed scope unblocks the queued item', (await store.pickNext(3))?.id, itemC.id);
+await store.markRunning(itemC.id, 'worker-cccc');
+await store.markFailed(itemC.id, 'phase 5/9 guardrails failed: lint exit 1');
+const halted = await store.snapshot();
+eq('host: queue: failure halts the queue', [halted.halted, halted.haltedBy], [true, itemC.id]);
+eq('host: queue: halt blocks new starts', (await store.pickNext(3)) === null, true);
+eq('host: queue: ack with the wrong id is refused', await store.ack('q1'), false);
+eq('host: queue: ack resumes the queue', await store.ack(itemC.id), true);
+eq('host: queue: ack leaves the failed item failed',
+	(await store.find(itemC.id))?.status, 'failed');
+// Crash recovery: a fresh store over the same dir re-queues running items.
+const itemE = await store.enqueue({ request: 'Crash victim', workspace: '/repo/a', scopes: ['docs/'] });
+await store.markRunning(itemE.id, 'worker-eeee');
+const recovered = host.createQueueStore({ dir: storeDir });
+eq('host: queue: crash recovery re-queues running items', (await recovered.find(itemE.id))?.status, 'queued');
+
+// ---------------------------------------------------------------------------
+// Enqueue listener + queue command grammar (against the temp DSH home).
+// ---------------------------------------------------------------------------
+const tick = () => new Promise((resolve) => { setTimeout(resolve, 20); });
+const fireSessionEvent = (event) => {
+	for (const handler of sessionEventHandlers) handler({ id: 'session-x', header: { cwd: workspace } }, event);
+};
+fireSessionEvent(assistantEvent(7, 'All settled.\n[factory] enqueue: {"request":"Build the retention pipeline","summary":"Retention","scopes":["src/"],"clarifications":[{"question":"Cap where?","answer":"At injection."}]}'));
+await tick();
+await tick();
+const liveStore = host.createQueueStore({ dir: join(queueHome, 'factory-queue') });
+const queueAfterLine = await liveStore.snapshot();
+const enqueued = queueAfterLine.items.find((item) => item.summary === 'Retention');
+check('host: enqueue line creates a queue item with payload and answers',
+	enqueued !== undefined && enqueued.status === 'queued'
+	&& enqueued.request === 'Build the retention pipeline'
+	&& enqueued.scopes.join(',') === 'src/'
+	&& enqueued.clarifications[0]?.answer === 'At injection.'
+	&& enqueued.sourceEvent === 'session-x:7',
+	{ items: queueAfterLine.items.map((item) => item.summary) });
+fireSessionEvent(assistantEvent(7, '[factory] enqueue: {"request":"Build the retention pipeline","summary":"Retention","scopes":["src/"],"clarifications":[]}'));
+await tick();
+eq('host: enqueue listener is idempotent per event seq',
+	(await liveStore.snapshot()).items.filter((item) => item.summary === 'Retention').length, 1);
+
+const queueStatus = await commandDef.handler({ agent: fakeAgent, rawInput: 'queue', attachments: [], signal: undefined });
+eq('host: /factory queue returns status text', [queueStatus.kind, queueStatus.text?.startsWith('Factory queue (concurrency 3):')], ['success', true]);
+const ackNothing = await commandDef.handler({ agent: fakeAgent, rawInput: 'queue ack', attachments: [], signal: undefined });
+eq('host: /factory queue ack with no halt is an error', ackNothing.kind, 'error');
+steered.length = 0;
+const enqueueRun = await commandDef.handler({ agent: fakeAgent, rawInput: '--queue Build the exporter', attachments: [], signal: undefined });
+eq('host: /factory --queue succeeds and steers the interview', enqueueRun.kind, 'success');
+const directive = steered[0]?.content?.find((block) => block?.type === 'text')?.text ?? '';
+check('host: enqueue directive carries the interview contract and request',
+	directive.includes('Factory queue enqueue interview')
+	&& directive.includes('Build the exporter')
+	&& directive.includes('NO batch limit')
+	&& directive.includes('[factory] enqueue:'));
+const enqueueQ = await commandDef.handler({ agent: fakeAgent, rawInput: '-q Another task', attachments: [], signal: undefined });
+check('host: -q short flag also enqueues', enqueueQ.kind === 'success' && steered.length === 2);
 
 console.log(failures === 0 ? '\nSMOKE PASS' : `\nSMOKE FAIL (${failures} failing checks)`);
 process.exit(failures === 0 ? 0 : 1);

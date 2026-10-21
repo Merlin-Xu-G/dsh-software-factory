@@ -71,7 +71,7 @@ window.__ModuleLoader__.load({
 		const exports = module.exports;
 		Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
 		const react = require('react');
-		const { createElement: h, Fragment, useState } = react;
+		const { createElement: h, Fragment, useEffect, useState } = react;
 
 		/** Copy namespace registered with the client locale service. */
 		const NS = 'softwareFactory';
@@ -85,6 +85,12 @@ window.__ModuleLoader__.load({
 		const STATUSES = ['pending', 'active', 'done', 'skipped', 'failed'];
 		/** Todo statuses (the captured plan) mapped onto the phase status dots. */
 		const TODO_STATUS_TO_DOT = { pending: 'pending', in_progress: 'active', completed: 'done' };
+		/** Queue item statuses mapped onto the phase status dots. */
+		const QUEUE_STATUS_TO_DOT = { queued: 'pending', running: 'active', succeeded: 'done', failed: 'failed' };
+		/** The queue read model served by this plugin's Host half (read-only). */
+		const QUEUE_URL = '/plugins/@local/dsh-software-factory/queue.json';
+		/** Queue page poll interval. */
+		const QUEUE_POLL_MS = 2000;
 		/** Selector for the framework-bound projection hook (uSES requires one). */
 		const identity = (value) => value;
 		/** Absence source used when the session binding has no projection store. */
@@ -119,6 +125,19 @@ window.__ModuleLoader__.load({
 			'.dsf-planRow .dsf-dot{margin-top:3px}',
 			'.dsf-planRowActive{background:var(--dsw-alias-fill-l1)}',
 			'.dsf-planText{flex:1;min-width:0;color:var(--dsw-alias-label-secondary);white-space:pre-wrap;overflow-wrap:anywhere}',
+			'.dsf-nav{display:flex;justify-content:flex-end}',
+			'.dsf-navButton{background:0 0;border:0;padding:2px 6px;border-radius:var(--dsw-radius-sm);color:var(--dsw-alias-label-secondary);cursor:pointer;font-size:11px;line-height:16px}',
+			'.dsf-navButton:hover,.dsf-navButton:focus-visible{background:var(--dsw-alias-fill-l1);color:var(--dsw-alias-label-primary)}',
+			'.dsf-queueRow .dsf-dot{margin-top:3px}',
+			'.dsf-queueMain{flex:1;min-width:0}',
+			'.dsf-queueTitle{color:var(--dsw-alias-label-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+			'.dsf-queueId{color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums;margin-right:6px}',
+			'.dsf-queueStatus{color:var(--dsw-alias-label-tertiary);margin-right:6px}',
+			'.dsf-queueMeta{color:var(--dsw-alias-label-tertiary);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+			'.dsf-queueFailure{color:var(--dsw-alias-state-error-primary);font-size:11px;overflow-wrap:anywhere}',
+			'.dsf-queueHalted{padding:6px 8px;border:.5px solid var(--dsw-alias-state-error-primary);border-radius:var(--dsw-radius-sm);color:var(--dsw-alias-state-error-primary)}',
+			'.dsf-queueHaltedTitle{font-size:12px}',
+			'.dsf-queueAckHint{font-size:11px;color:var(--dsw-alias-label-secondary)}',
 			'.dsf-last{margin-top:4px;padding:6px 8px;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-fill-l1);font-family:var(--dsw-font-mono);font-size:11px;color:var(--dsw-alias-label-secondary);word-break:break-word}',
 			'.dsf-lastLabel{display:block;margin-bottom:2px;font-size:10px;color:var(--dsw-alias-label-tertiary)}',
 			'.dsf-titleIcon{flex:none}',
@@ -144,6 +163,18 @@ window.__ModuleLoader__.load({
 			'plan.back': '‹ 阶段列表',
 			'plan.empty': '本轮运行还没有记录计划（阶段 2 会用 todo 工具写入）。',
 			'plan.openAria': '查看本轮计划',
+			'queue.nav': '队列',
+			'queue.back': '‹ 阶段列表',
+			'queue.title': '工厂队列',
+			'queue.empty': '队列为空 —— 用 /factory -q <需求> 入队。',
+			'queue.halted': '队列已因失败暂停',
+			'queue.ackHint': '运行 /factory queue ack 恢复调度。',
+			'queue.loadError': '队列状态不可用（读取失败）。',
+			'queue.wholeWorkspace': '（整个工作区）',
+			'queue.item.queued': '待运行',
+			'queue.item.running': '运行中',
+			'queue.item.succeeded': '已完成',
+			'queue.item.failed': '失败',
 			'status.pending': '待执行',
 			'status.active': '进行中',
 			'status.done': '已完成',
@@ -162,6 +193,18 @@ window.__ModuleLoader__.load({
 			'plan.back': '‹ Phases',
 			'plan.empty': 'No plan recorded for this run yet (phase 2 writes it with the todo tool).',
 			'plan.openAria': 'Show the plan for this run',
+			'queue.nav': 'Queue',
+			'queue.back': '‹ Phases',
+			'queue.title': 'Factory queue',
+			'queue.empty': 'The queue is empty — enqueue with /factory -q <request>.',
+			'queue.halted': 'Queue halted by a failure',
+			'queue.ackHint': 'Run /factory queue ack to resume scheduling.',
+			'queue.loadError': 'Queue status unavailable (fetch failed).',
+			'queue.wholeWorkspace': '(whole workspace)',
+			'queue.item.queued': 'queued',
+			'queue.item.running': 'running',
+			'queue.item.succeeded': 'succeeded',
+			'queue.item.failed': 'failed',
 			'status.pending': 'pending',
 			'status.active': 'active',
 			'status.done': 'done',
@@ -250,18 +293,111 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
+		 * The queue page (pure renderer): the global factory queue read model —
+		 * one row per item (id, status, summary, scopes, failure reason), the
+		 * halt banner with its ack hint when a failure froze the queue, and a
+		 * back control returning to the phase list.
+		 */
+		function FactoryQueuePage({ queue, error, t, onBack }) {
+			const items = Array.isArray(queue?.items) ? queue.items : [];
+			return h('div', { className: 'dsf-root' },
+				h('button', {
+					type: 'button',
+					className: 'dsf-back',
+					onClick: onBack,
+					'aria-label': t('queue.back'),
+				}, t('queue.back')),
+				h('div', { className: 'dsf-planTitle' }, t('queue.title')),
+				queue?.halted === true
+					? h('div', { className: 'dsf-queueHalted' },
+						h('div', { className: 'dsf-queueHaltedTitle' }, t('queue.halted')),
+						h('div', { className: 'dsf-queueAckHint' }, t('queue.ackHint')))
+					: null,
+				error !== null && queue === null
+					? h('div', { className: 'dsf-empty' },
+						h('div', { className: 'dsf-emptyTitle' }, t('queue.loadError')))
+					: items.length === 0
+						? h('div', { className: 'dsf-empty' },
+							h('div', { className: 'dsf-emptyTitle' }, t('queue.empty')))
+						: h('div', { className: 'dsf-planList', role: 'list' }, items.map((item) => h('div', {
+							className: `dsf-queueRow${item.status === 'running' ? ' dsf-planRowActive' : ''}`,
+							role: 'listitem',
+							key: item.id,
+						},
+						h(StatusDot, { status: QUEUE_STATUS_TO_DOT[item.status] ?? 'pending' }),
+						h('div', { className: 'dsf-queueMain' },
+							h('div', { className: 'dsf-queueTitle' },
+								h('span', { className: 'dsf-queueId' }, `[${item.id}]`),
+								h('span', { className: 'dsf-queueStatus' }, t(`queue.item.${QUEUE_STATUS_TO_DOT[item.status] === 'failed' ? 'failed' : item.status}`)),
+								typeof item.summary === 'string' && item.summary !== '' ? item.summary : ''),
+							h('div', { className: 'dsf-queueMeta' },
+								Array.isArray(item.scopes) && item.scopes.length > 0
+									? item.scopes.join(', ')
+									: t('queue.wholeWorkspace')),
+							typeof item.failureReason === 'string' && item.failureReason !== ''
+								? h('div', { className: 'dsf-queueFailure' }, item.failureReason)
+								: null)))));
+		}
+
+		/**
+		 * The queue page's live wrapper: polls the Host's read-only queue.json
+		 * route while mounted (same-origin fetch; this bundle runs as a real
+		 * browser script) and renders the pure page from the latest snapshot.
+		 */
+		function FactoryQueuePageLive({ t, onBack }) {
+			const [queue, setQueue] = useState(null);
+			const [error, setError] = useState(null);
+			useEffect(() => {
+				let alive = true;
+				const load = () => {
+					fetch(QUEUE_URL)
+						.then((response) => response.json())
+						.then((data) => {
+							if (alive) {
+								setQueue(data);
+								setError(null);
+							}
+						})
+						.catch(() => {
+							if (alive) setError('fetch failed');
+						});
+				};
+				load();
+				const timer = setInterval(load, QUEUE_POLL_MS);
+				return () => {
+					alive = false;
+					clearInterval(timer);
+				};
+			}, []);
+			return h(FactoryQueuePage, { queue, error, t, onBack });
+		}
+
+		/**
 		 * The tab body: nine phase rows with live status, the latest narration
 		 * line verbatim, and a quiet empty state when nothing runs. The plan
-		 * phase row is a button that opens the plan detail page (an in-tab
-		 * subpage); the framework binds `hooks.factoryState` (this occupant's
+		 * phase row is a button that opens the plan detail page, and the nav
+		 * row's Queue button opens the global queue page (both in-tab
+		 * subpages); the framework binds `hooks.factoryState` (this occupant's
 		 * inject face) into the `useFactoryState(selector)` selector hook, and
 		 * `t` comes from the registration's `locale` seat.
 		 */
 		function FactoryTabBody({ useFactoryState, t }) {
 			const view = useFactoryState(identity);
 			const [page, setPage] = useState('phases');
+			if (page === 'queue') {
+				return h(FactoryQueuePageLive, { t, onBack: () => setPage('phases') });
+			}
+			/** The Queue nav entry: opens the global queue page from any state. */
+			const queueNav = h('div', { className: 'dsf-nav' },
+				h('button', {
+					type: 'button',
+					className: 'dsf-navButton',
+					onClick: () => setPage('queue'),
+					title: t('queue.nav'),
+				}, t('queue.nav')));
 			if (view === undefined || view === null) {
 				return h('div', { className: 'dsf-root' },
+					queueNav,
 					h('div', { className: 'dsf-empty' },
 						h('div', { className: 'dsf-emptyTitle' }, t('empty.unavailable'))));
 			}
@@ -272,12 +408,14 @@ window.__ModuleLoader__.load({
 			const started = view.running === true || phases.some((phase) => phase.status !== 'pending');
 			if (!started) {
 				return h('div', { className: 'dsf-root' },
+					queueNav,
 					h('div', { className: 'dsf-empty' },
 						h(FactoryGlyph, { size: 28 }),
 						h('div', { className: 'dsf-emptyTitle' }, t('empty.none')),
 						h('div', { className: 'dsf-emptyHint' }, t('empty.hint'))));
 			}
 			return h('div', { className: 'dsf-root' },
+				queueNav,
 				h('div', { className: 'dsf-list', role: 'list' }, phases.map((phase) => {
 					const status = STATUSES.includes(phase.status) ? phase.status : 'pending';
 					const cells = [

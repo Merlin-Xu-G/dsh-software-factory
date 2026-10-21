@@ -31,6 +31,8 @@ const base = {
   evaluate: true,
   subagentImplementation: true,
   autoOpenTab: true,
+  grill: true,
+  queueConcurrency: 3,
   deploy: { enabled: false, command: [] },
   guardrailCommand: [],
   testCommand: [],
@@ -63,12 +65,24 @@ const scenarios = [
       evaluate: 'List every changed file.',
     },
   }, ''],
+  ['grill-off', {
+    ...base,
+    grill: false,
+  }, 'Small fix, no interview needed'],
+  ['worker', base, 'Build the retention pipeline', {
+    autonomous: true,
+    titleHint: 'Factory queue q1: retention pipeline',
+    clarifications: [
+      { question: 'Where is the cap applied?', answer: 'Cap at injection; files stay unbounded.' },
+      { question: 'Default budget?', answer: '8192 characters.' },
+    ],
+  }],
 ];
 
 const out = [];
-for (const [name, resolved, request] of scenarios) {
+for (const [name, resolved, request, options] of scenarios) {
   out.push(`===== ${name} =====`);
-  out.push(buildPipelinePrompt(Object.freeze(resolved), request));
+  out.push(buildPipelinePrompt(Object.freeze(resolved), request, options));
 }
 const rendered = out.join('\n');
 
