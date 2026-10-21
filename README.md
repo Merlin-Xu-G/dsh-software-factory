@@ -187,9 +187,12 @@ with an empty state while no run is active.
 - **State source**: the Host's `factory` session projection folds
   `assistant/message` session-log events, matching ONLY lines that start
   with the plugin's own narration contract
-  (`[factory] phase <n>/9 <key>: <status>`), and counts each `/factory`
-  `command/run` into a monotonic `runCount` on the same wire view. The wire
-  view reaches the client through the shipped session binding
+  (`[factory] phase <n>/9 <key>: <status>`), counts each `/factory`
+  `command/run` into a monotonic `runCount` on the same wire view, and
+  captures the run's todo list as `plan` while the run is active (the whole
+  list phase 2 records; the shipped `todos` projection is cleared on every
+  turn, so it cannot serve a durable view). The wire view reaches the
+  client through the shipped session binding
   (`sessions.binding(id).session.projections.faceOf('factory')`) — the same
   host→client shape the shipped plan-mode and goal plugins use. Because it
   is a session projection, resume and fork restore the progress view.
@@ -218,6 +221,10 @@ with an empty state while no run is active.
   on-screen session's progress). The `autoOpenTab` plugin config (default
   on) gates the open — it travels in the projection's wire view (`autoOpen`),
   so there is no separate client-side setting.
+- **Plan subpage**: the plan phase row is a button that swaps the tab body
+  to a detail page listing the run's whole plan — every todo with its live
+  status — followed by a back control returning to the phase list. A run
+  without a recorded plan shows an explicit empty state on that page.
 - **Styling**: theme tokens only (`--dsw-alias-*`, `--dsw-radius-*`,
   `--dsw-font-mono`); React from the browser module table; no Harness
   client package is imported.
@@ -271,9 +278,11 @@ with an empty state while no run is active.
   phases as done; `skip` in the text marks the phase skipped;
   `fail`/`error`/`blocked` marks it failed; a phase-8 line ends the run; a
   later phase-1 line starts a fresh run; `command/run` events naming this
-  command bump the monotonic `runCount` (the auto-open signal), and the wire
+  command bump the monotonic `runCount` (the auto-open signal), the wire
   view carries the row config's `autoOpenTab` switch as `autoOpen` so the
-  client honors the same declarative configuration.
+  client honors the same declarative configuration, and `todo/write`
+  snapshots fold into the durable `plan` while a run is active (v5; the
+  shipped `todos` projection is turn-scoped).
 - **Locale**: `locale/en.json` + `locale/zh.json` carry the Plugin Manager
   title/description; `icon.svg` is the card icon; the client tab registers
   its own `softwareFactory` dictionary with the client locale service.

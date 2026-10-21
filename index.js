@@ -17,7 +17,7 @@
  *   rejection) and the deploy gate.
  * - `lib/projection.js` — the `factory` session projection: the log fold,
  *   schema facades, and the wire view (running / runCount / autoOpen /
- *   phases / lastLine) the Web client reads through
+ *   plan / phases / lastLine) the Web client reads through
  *   `sessions.binding(id).session.projections.faceOf('factory')`.
  * - `lib/project-file.js` — the `.factory.yml` parser, workspace-root
  *   reader, and override merge (the dsh-agent-instructions pattern).

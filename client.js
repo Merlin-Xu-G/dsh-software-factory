@@ -45,6 +45,11 @@
  *   binding and absence reads as an `undefined` snapshot (capability
  *   absent), so the projection face itself is a valid hook source; the body
  *   distinguishes "progress projection not loaded" from "no run yet".
+ * - Plan subpage: the plan phase row is a button that swaps the body to a
+ *   detail page listing the run's whole captured plan (the wire view's
+ *   `plan`, folded host-side from `todo/write` events while the run is
+ *   active — the shipped `todos` projection is turn-scoped and cannot serve
+ *   a durable view), with a back control returning to the phase list.
  * - Auto-open: the plugin body subscribes to `ctx.sidebarRight.mounted` (the
  *   on-screen Session observable) and, per mounted session, to its `factory`
  *   projection face; a live `runCount` increment (the Host fold counts
@@ -66,7 +71,7 @@ window.__ModuleLoader__.load({
 		const exports = module.exports;
 		Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
 		const react = require('react');
-		const { createElement: h, Fragment } = react;
+		const { createElement: h, Fragment, useState } = react;
 
 		/** Copy namespace registered with the client locale service. */
 		const NS = 'softwareFactory';
@@ -78,6 +83,8 @@ window.__ModuleLoader__.load({
 		const PROJECTION_KEY = 'factory';
 		/** Status values the Host projection emits. */
 		const STATUSES = ['pending', 'active', 'done', 'skipped', 'failed'];
+		/** Todo statuses (the captured plan) mapped onto the phase status dots. */
+		const TODO_STATUS_TO_DOT = { pending: 'pending', in_progress: 'active', completed: 'done' };
 		/** Selector for the framework-bound projection hook (uSES requires one). */
 		const identity = (value) => value;
 		/** Absence source used when the session binding has no projection store. */
@@ -101,6 +108,17 @@ window.__ModuleLoader__.load({
 			'.dsf-key{flex:none;width:64px;color:var(--dsw-alias-label-secondary)}',
 			'.dsf-text{flex:1;min-width:0;color:var(--dsw-alias-label-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
 			'.dsf-rowActive .dsf-text{color:var(--dsw-alias-label-primary)}',
+			'.dsf-rowButton{width:100%;text-align:left;background:0 0;border:0;font:inherit;color:inherit;cursor:pointer}',
+			'.dsf-rowButton:hover,.dsf-rowButton:focus-visible{background:var(--dsw-alias-fill-l1)}',
+			'.dsf-rowChevron{flex:none;color:var(--dsw-alias-label-tertiary)}',
+			'.dsf-back{align-self:flex-start;background:0 0;border:0;padding:2px 6px;border-radius:var(--dsw-radius-sm);color:var(--dsw-alias-label-secondary);cursor:pointer;font-size:12px;line-height:18px}',
+			'.dsf-back:hover,.dsf-back:focus-visible{background:var(--dsw-alias-fill-l1);color:var(--dsw-alias-label-primary)}',
+			'.dsf-planTitle{padding:0 6px;color:var(--dsw-alias-label-primary)}',
+			'.dsf-planList{display:flex;flex-direction:column;gap:1px}',
+			'.dsf-planRow{display:flex;align-items:flex-start;gap:8px;padding:4px 6px;border-radius:var(--dsw-radius-sm)}',
+			'.dsf-planRow .dsf-dot{margin-top:3px}',
+			'.dsf-planRowActive{background:var(--dsw-alias-fill-l1)}',
+			'.dsf-planText{flex:1;min-width:0;color:var(--dsw-alias-label-secondary);white-space:pre-wrap;overflow-wrap:anywhere}',
 			'.dsf-last{margin-top:4px;padding:6px 8px;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-fill-l1);font-family:var(--dsw-font-mono);font-size:11px;color:var(--dsw-alias-label-secondary);word-break:break-word}',
 			'.dsf-lastLabel{display:block;margin-bottom:2px;font-size:10px;color:var(--dsw-alias-label-tertiary)}',
 			'.dsf-titleIcon{flex:none}',
@@ -122,6 +140,10 @@ window.__ModuleLoader__.load({
 			'empty.hint': '输入 /factory <需求> 启动 9 阶段交付流水线。',
 			'empty.unavailable': '进度不可用（未加载进度投影）。',
 			'last.label': '最新状态',
+			'plan.title': '本轮计划',
+			'plan.back': '‹ 阶段列表',
+			'plan.empty': '本轮运行还没有记录计划（阶段 2 会用 todo 工具写入）。',
+			'plan.openAria': '查看本轮计划',
 			'status.pending': '待执行',
 			'status.active': '进行中',
 			'status.done': '已完成',
@@ -136,6 +158,10 @@ window.__ModuleLoader__.load({
 			'empty.hint': 'Type /factory <request> to start the 9-phase delivery pipeline.',
 			'empty.unavailable': 'Progress unavailable (progress projection not loaded).',
 			'last.label': 'Latest status',
+			'plan.title': 'Plan for this run',
+			'plan.back': '‹ Phases',
+			'plan.empty': 'No plan recorded for this run yet (phase 2 writes it with the todo tool).',
+			'plan.openAria': 'Show the plan for this run',
 			'status.pending': 'pending',
 			'status.active': 'active',
 			'status.done': 'done',
@@ -197,18 +223,50 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
+		 * The plan detail page: the run's whole captured plan (the todo list
+		 * phase 2 records), one row per task with its live todo status, and a
+		 * back control returning to the phase list.
+		 */
+		function FactoryPlanPage({ plan, t, onBack }) {
+			const items = Array.isArray(plan) ? plan : [];
+			return h('div', { className: 'dsf-root' },
+				h('button', {
+					type: 'button',
+					className: 'dsf-back',
+					onClick: onBack,
+					'aria-label': t('plan.back'),
+				}, t('plan.back')),
+				h('div', { className: 'dsf-planTitle' }, t('plan.title')),
+				items.length === 0
+					? h('div', { className: 'dsf-empty' },
+						h('div', { className: 'dsf-emptyTitle' }, t('plan.empty')))
+					: h('div', { className: 'dsf-planList', role: 'list' }, items.map((item, index) => h('div', {
+						className: `dsf-planRow${item.status === 'in_progress' ? ' dsf-planRowActive' : ''}`,
+						role: 'listitem',
+						key: `${index}:${item.content}`,
+					},
+					h(StatusDot, { status: TODO_STATUS_TO_DOT[item.status] ?? 'pending' }),
+					h('span', { className: 'dsf-planText' }, item.content)))));
+		}
+
+		/**
 		 * The tab body: nine phase rows with live status, the latest narration
-		 * line verbatim, and a quiet empty state when nothing runs. The
-		 * framework binds `hooks.factoryState` (this occupant's inject face)
-		 * into the `useFactoryState(selector)` selector hook; `t` comes from the
-		 * registration's `locale` seat.
+		 * line verbatim, and a quiet empty state when nothing runs. The plan
+		 * phase row is a button that opens the plan detail page (an in-tab
+		 * subpage); the framework binds `hooks.factoryState` (this occupant's
+		 * inject face) into the `useFactoryState(selector)` selector hook, and
+		 * `t` comes from the registration's `locale` seat.
 		 */
 		function FactoryTabBody({ useFactoryState, t }) {
 			const view = useFactoryState(identity);
+			const [page, setPage] = useState('phases');
 			if (view === undefined || view === null) {
 				return h('div', { className: 'dsf-root' },
 					h('div', { className: 'dsf-empty' },
 						h('div', { className: 'dsf-emptyTitle' }, t('empty.unavailable'))));
+			}
+			if (page === 'plan') {
+				return h(FactoryPlanPage, { plan: view.plan, t, onBack: () => setPage('phases') });
 			}
 			const phases = Array.isArray(view.phases) ? view.phases : [];
 			const started = view.running === true || phases.some((phase) => phase.status !== 'pending');
@@ -222,18 +280,31 @@ window.__ModuleLoader__.load({
 			return h('div', { className: 'dsf-root' },
 				h('div', { className: 'dsf-list', role: 'list' }, phases.map((phase) => {
 					const status = STATUSES.includes(phase.status) ? phase.status : 'pending';
+					const cells = [
+						h(StatusDot, { status }),
+						h('span', { className: 'dsf-num' }, `${phase.n}/9`),
+						h('span', { className: 'dsf-key' }, phase.key),
+						h('span', {
+							className: 'dsf-text',
+							title: phase.text ?? t(`status.${status}`),
+						}, phase.text ?? t(`status.${status}`))];
+					// The plan row opens the plan detail page.
+					if (phase.key === 'plan') {
+						cells.push(h('span', { className: 'dsf-rowChevron', 'aria-hidden': 'true' }, '›'));
+						return h('button', {
+							type: 'button',
+							className: `dsf-row dsf-rowButton${status === 'active' ? ' dsf-rowActive' : ''}`,
+							role: 'listitem',
+							key: phase.key,
+							onClick: () => setPage('plan'),
+							title: t('plan.openAria'),
+						}, ...cells);
+					}
 					return h('div', {
 						className: `dsf-row${status === 'active' ? ' dsf-rowActive' : ''}`,
 						role: 'listitem',
 						key: phase.key,
-					},
-					h(StatusDot, { status }),
-					h('span', { className: 'dsf-num' }, `${phase.n}/9`),
-					h('span', { className: 'dsf-key' }, phase.key),
-					h('span', {
-						className: 'dsf-text',
-						title: phase.text ?? t(`status.${status}`),
-					}, phase.text ?? t(`status.${status}`)));
+					}, ...cells);
 				})),
 				typeof view.lastLine === 'string' && view.lastLine !== ''
 					? h('div', { className: 'dsf-last' },
