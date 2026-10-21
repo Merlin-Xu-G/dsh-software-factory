@@ -138,8 +138,8 @@ window.__ModuleLoader__.load({
 			'.dsf-queueHalted{padding:6px 8px;border:.5px solid var(--dsw-alias-state-error-primary);border-radius:var(--dsw-radius-sm);color:var(--dsw-alias-state-error-primary)}',
 			'.dsf-queueHaltedTitle{font-size:12px}',
 			'.dsf-queueAckHint{font-size:11px;color:var(--dsw-alias-label-secondary)}',
-			'.dsf-queueActions{flex:none;display:flex;flex-direction:column;gap:2px}',
-			'.dsf-queueAction{background:0 0;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-sm);padding:1px 6px;color:var(--dsw-alias-label-secondary);cursor:pointer;font-size:10px;line-height:14px}',
+			'.dsf-queueActions{flex:none;display:flex;flex-direction:row;gap:2px;align-items:flex-start}',
+			'.dsf-queueAction{background:0 0;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-sm);padding:0 4px;color:var(--dsw-alias-label-tertiary);cursor:pointer;font-size:10px;line-height:14px;flex:none}',
 			'.dsf-queueAction:hover,.dsf-queueAction:focus-visible{background:var(--dsw-alias-fill-l1);color:var(--dsw-alias-label-primary)}',
 			'.dsf-queueActionRetry{color:var(--dsw-alias-state-error-primary)}',
 			'.dsf-queueActionRemove:hover,.dsf-queueActionRemove:focus-visible{color:var(--dsw-alias-state-error-primary)}',
@@ -378,7 +378,7 @@ window.__ModuleLoader__.load({
 								? h('button', {
 									type: 'button',
 									className: 'dsf-queueAction',
-									onClick: () => uiWorkspaceService?.openSession({ kind: 'session', sessionId: item.workerSessionId }),
+									onClick: () => uiWorkspaceService?.openSession(item.workerSessionId),
 									title: t('queue.openAria'),
 								}, t('queue.open'))
 								: null,

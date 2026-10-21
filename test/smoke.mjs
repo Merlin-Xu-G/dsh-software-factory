@@ -333,7 +333,7 @@ const openButtons = haltedTree.filter((node) => typeof node === 'object'
 	&& node.props.className === 'dsf-queueAction');
 eq('client: queue rows carry one Open button per session-bearing item', openButtons.length, 3);
 openButtons[2].props.onClick();
-eq('client: Open jumps to the worker session', openedSessions, [{ kind: 'session', sessionId: 'ws-3' }]);
+eq('client: Open jumps to the worker session (plain session id)', openedSessions, ['ws-3']);
 const retryButtons = haltedTree.filter((node) => typeof node === 'object'
 	&& node.props.className === 'dsf-queueAction dsf-queueActionRetry');
 eq('client: exactly the failed item has a Retry button', retryButtons.length, 1);
@@ -818,9 +818,11 @@ fireSessionEvent(assistantEvent(9, '[factory] enqueue: {"request":"Route retry t
 // Poll until the dead worker settles (the pump's serialized writes make
 // fixed ticks racy).
 let routeItemSnap = null;
-for (let attempt = 0; attempt < 50 && routeItemSnap === null; attempt += 1) {
+for (let attempt = 0; attempt < 100 && routeItemSnap === null; attempt += 1) {
 	await tick();
 	try {
+		// A fresh store per read: a cached instance would never see the
+		// runtime's writes.
 		const snap = await host.createQueueStore({ dir: join(queueHome, 'factory-queue') }).snapshot();
 		routeItemSnap = snap.items.find((item) => item.summary === 'Route retry' && item.status !== 'queued') ?? null;
 	} catch {
@@ -830,8 +832,7 @@ for (let attempt = 0; attempt < 50 && routeItemSnap === null; attempt += 1) {
 const routeBefore = host.createQueueStore({ dir: join(queueHome, 'factory-queue') });
 check('host: route fixture: the earlier queued item completed and the dead worker failed',
 	routeItemSnap?.status === 'failed' && routeItemSnap?.failureReason?.includes('turn never started'),
-	{ routeItemSnap });
-const makeRes = () => ({
+	{ routeItemSnap });const makeRes = () => ({
   status: 0,
   body: '',
   writeHead(status) { this.status = status; return this; },
@@ -853,6 +854,17 @@ const makeReq = (method, headers, body) => {
   }
   return req;
 };
+/** Read a queue snapshot tolerating torn Windows rename reads. */
+async function safeSnapshot(store, attempts = 20) {
+	for (let attempt = 0; ; attempt += 1) {
+		try {
+			return await store.snapshot();
+		} catch (error) {
+			if (attempt >= attempts) throw error;
+			await tick();
+		}
+	}
+}
 const guardRes = makeRes();
 await routeHandler(makeReq('POST', {}), guardRes);
 eq('host: route: POST without the action header is forbidden', guardRes.status, 403);
@@ -861,10 +873,11 @@ await routeHandler(makeReq('POST', { 'x-dsh-factory-action': 'queue' }, JSON.str
 await tick();
 await tick();
 const routeAfter = host.createQueueStore({ dir: join(queueHome, 'factory-queue') });
+const routeAfterSnap = await safeSnapshot(routeAfter);
 eq('host: route: POST retry re-queues, the worker reruns, and the halt lifts', [
 	retryRes.status,
-	(await routeAfter.snapshot()).items.find((item) => item.id === routeItemSnap?.id)?.status,
-	(await routeAfter.snapshot()).halted,
+	routeAfterSnap.items.find((item) => item.id === routeItemSnap?.id)?.status,
+	routeAfterSnap.halted,
 ], [200, 'succeeded', false]);
 const badActionRes = makeRes();
 await routeHandler(makeReq('POST', { 'x-dsh-factory-action': 'queue' }, JSON.stringify({ action: 'nope' })), badActionRes);
