@@ -2,20 +2,19 @@
  * Behavioral smoke for @local/dsh-software-factory (run with the bundled
  * node, or via `npm test`).
  *
- * Migrated from the git-ignored .tmp scratch into the tracked test/ suite;
- * assertions are unchanged.
- *
  * Client half: mounts the ModuleLoader bundle with a stubbed browser
  * environment and stub React, applies it to a fake client ctx, then checks
  * the tab-type declaration (including the guide entry that makes the tab
  * reachable), the keyed seat registrations, the inject(sessionId) observable
- * face contract, and the body's rendering for the three wire-view states.
+ * face contract, the body's rendering for the three wire-view states, and
+ * the plan subpage navigation (plan row button → detail page → back).
  *
  * Host half: captures the projection definition and command definition
  * through a fake cordis ctx, folds a synthetic session log through the
- * projection (including the skip/fail/fresh-run semantics), validates the
- * wire view through the schema facade, and runs the command handler against
- * a fake agent (steer capture, usage error).
+ * projection (including the skip/fail/fresh-run semantics and the plan
+ * capture from todo/write events), validates the wire view through the
+ * schema facade, and runs the command handler against a fake agent (steer
+ * capture, usage error).
  */
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -54,10 +53,23 @@ globalThis.document = {
 	head: { appendChild: (tag) => styleTags.push(tag) },
 };
 
-// Stub React: record createElement trees; the module must need nothing else.
+// Stub React: record createElement trees; useState keeps a persistent hook
+// store so sequential renders behave like one mounted component. The module
+// must need nothing else.
+const hookStore = [];
+let hookIndex = 0;
+const resetHooks = () => { hookIndex = 0; };
 const stubReact = {
 	createElement: (type, props, ...children) => ({ type, props: props ?? {}, children }),
 	Fragment: Symbol.for('react.fragment'),
+	useState(initial) {
+		const slot = hookIndex++;
+		if (hookStore.length <= slot) {
+			hookStore[slot] = { value: typeof initial === 'function' ? initial() : initial };
+		}
+		const cell = hookStore[slot];
+		return [cell.value, (next) => { cell.value = typeof next === 'function' ? next(cell.value) : next; }];
+	},
 };
 const requiredSpecifiers = [];
 const stubRequire = (specifier) => {
@@ -205,12 +217,18 @@ check('client: absent binding falls back to an absent observable (undefined snap
 // Render the body the way the shipped renderer would: a selector hook bound
 // from the observable source (uSES requires a selector argument).
 function renderBody(source) {
+	resetHooks();
 	const useFactoryState = (selector) => selector(source.getSnapshot());
 	return bodyRegister.component({ useFactoryState, t: (key) => `t:${key}` });
 }
 function flatten(node, out = []) {
 	if (Array.isArray(node)) { for (const child of node) flatten(child, out); return out; }
 	if (node && typeof node === 'object' && 'type' in node) {
+		// Execute function components the way the real renderer would.
+		if (typeof node.type === 'function') {
+			flatten(node.type(node.props), out);
+			return out;
+		}
 		out.push(node);
 		flatten(node.children, out);
 	} else if (node !== null && node !== undefined && node !== false && node !== true) {
@@ -218,13 +236,53 @@ function flatten(node, out = []) {
 	}
 	return out;
 }
+/** First element node whose className contains the given fragment. */
+function findByClass(tree, fragment) {
+	return tree.find((node) => typeof node === 'object' && typeof node.props.className === 'string'
+		&& node.props.className.includes(fragment));
+}
 const liveTree = flatten(renderBody(faces['session-1']));
 const liveClasses = liveTree.filter((n) => typeof n === 'object').map((n) => n.props.className).filter(Boolean);
-check('client: live run renders 9 phase rows', liveClasses.filter((c) => c.startsWith('dsf-row')).length === 9, { liveClasses });
+const isRowClass = (c) => c === 'dsf-row' || c.startsWith('dsf-row ');
+check('client: live run renders 9 phase rows', liveClasses.filter(isRowClass).length === 9, { liveClasses });
 check('client: active phase row highlighted', liveClasses.includes('dsf-row dsf-rowActive'));
 check('client: last narration line rendered verbatim',
 	liveTree.includes('[factory] phase 3/9 implement: implementing task 2/5'));
 check('client: review phase row present', liveTree.includes('review'));
+
+// Plan subpage: the plan phase row is a button that swaps the body to the
+// plan detail page and back (liveView carries no plan yet — empty detail).
+const planButton = findByClass(liveTree, 'dsf-rowButton');
+check('client: plan phase row is a clickable button', planButton?.type === 'button' && typeof planButton?.props.onClick === 'function');
+planButton.props.onClick();
+const planEmptyTree = flatten(renderBody(faces['session-1']));
+check('client: plan detail page opens with the empty state (no plan recorded)',
+	planEmptyTree.includes('t:plan.title') && planEmptyTree.includes('t:plan.empty'));
+const backButton = findByClass(planEmptyTree, 'dsf-back');
+check('client: plan detail page has a back control', backButton?.type === 'button' && typeof backButton?.props.onClick === 'function');
+backButton.props.onClick();
+check('client: back returns to the phase list',
+	flatten(renderBody(faces['session-1'])).filter((n) => typeof n === 'object'
+		&& typeof n.props.className === 'string'
+		&& isRowClass(n.props.className)).length === 9);
+const PLAN_ITEMS = [
+	{ content: 'verify todo projection contract', status: 'completed' },
+	{ content: 'implement the plan detail page', status: 'in_progress' },
+	{ content: 'extend the smoke suite', status: 'pending' },
+];
+faces['session-1'].set({ ...liveView, plan: PLAN_ITEMS });
+const planListTree = flatten(renderBody(faces['session-1']));
+findByClass(planListTree, 'dsf-rowButton').props.onClick();
+const planDetailTree = flatten(renderBody(faces['session-1']));
+check('client: plan detail page lists every todo with live status',
+	planDetailTree.includes('verify todo projection contract')
+	&& planDetailTree.includes('implement the plan detail page')
+	&& planDetailTree.includes('extend the smoke suite')
+	&& planDetailTree.some((node) => typeof node === 'object'
+		&& node.props.className === 'dsf-planRow dsf-planRowActive'));
+faces['session-1'].set(liveView);
+resetHooks();
+hookStore.length = 0;
 
 const initialFace = { getSnapshot: () => ({ running: false, phases: Array.from({ length: 9 }, (_, i) => ({ n: i + 1, key: `p${i}`, status: 'pending', text: null })), lastLine: null }), subscribe: () => () => {} };
 const emptyTree = flatten(renderBody(initialFace));
@@ -393,6 +451,32 @@ projectionDef.wire.viewSchema.parse(viewRuns2);
 eq('host: a phase-1 line resets the board and runCount survives it',
 	[viewRuns2.phases[0].status, viewRuns2.phases[1].status, viewRuns2.runCount],
 	['active', 'pending', 2]);
+
+// The run's plan: todo/write lists fold into a durable `plan` while the run
+// is active; writes outside a run never touch it, and a fresh run clears it.
+const todoWrite = (seq, todos) => ({ seq, time: seq, type: 'todo/write', data: { todos } });
+let statePlan = projectionDef.init({}, 0);
+statePlan = projectionDef.apply(statePlan, todoWrite(1, [{ content: 'pre-run todo', status: 'pending' }]));
+eq('host: todo writes outside a run are ignored', projectionDef.wire.view(statePlan).plan, null);
+statePlan = projectionDef.apply(statePlan, assistantEvent(2, '[factory] phase 1/9 capture: restated'));
+statePlan = projectionDef.apply(statePlan, todoWrite(3, [
+	{ content: 'verify contract', status: 'completed' },
+	{ content: 'implement page', status: 'in_progress' },
+]));
+const viewPlan = projectionDef.wire.view(statePlan);
+projectionDef.wire.viewSchema.parse(viewPlan);
+eq('host: todo writes during an active run fold into the plan',
+	viewPlan.plan,
+	[{ content: 'verify contract', status: 'completed' }, { content: 'implement page', status: 'in_progress' }]);
+statePlan = projectionDef.apply(statePlan, assistantEvent(4, '[factory] phase 9/9 evaluate: done'));
+statePlan = projectionDef.apply(statePlan, todoWrite(5, [{ content: 'unrelated later todo', status: 'pending' }]));
+const viewPlanDone = projectionDef.wire.view(statePlan);
+projectionDef.wire.viewSchema.parse(viewPlanDone);
+eq('host: the settled run keeps its plan against later todo writes', viewPlanDone.plan?.length, 2);
+statePlan = projectionDef.apply(statePlan, assistantEvent(6, '[factory] phase 1/9 capture: fresh run'));
+const viewPlanFresh = projectionDef.wire.view(statePlan);
+projectionDef.wire.viewSchema.parse(viewPlanFresh);
+eq('host: a fresh run clears the plan until phase 2 writes one', viewPlanFresh.plan, null);
 
 // Command handler against a fake agent.
 const steered = [];
