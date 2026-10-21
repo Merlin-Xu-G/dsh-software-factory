@@ -142,6 +142,7 @@ window.__ModuleLoader__.load({
 			'.dsf-queueAction{background:0 0;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-sm);padding:1px 6px;color:var(--dsw-alias-label-secondary);cursor:pointer;font-size:10px;line-height:14px}',
 			'.dsf-queueAction:hover,.dsf-queueAction:focus-visible{background:var(--dsw-alias-fill-l1);color:var(--dsw-alias-label-primary)}',
 			'.dsf-queueActionRetry{color:var(--dsw-alias-state-error-primary)}',
+			'.dsf-queueActionRemove:hover,.dsf-queueActionRemove:focus-visible{color:var(--dsw-alias-state-error-primary)}',
 			'.dsf-last{margin-top:4px;padding:6px 8px;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-fill-l1);font-family:var(--dsw-font-mono);font-size:11px;color:var(--dsw-alias-label-secondary);word-break:break-word}',
 			'.dsf-lastLabel{display:block;margin-bottom:2px;font-size:10px;color:var(--dsw-alias-label-tertiary)}',
 			'.dsf-titleIcon{flex:none}',
@@ -181,8 +182,10 @@ window.__ModuleLoader__.load({
 			'queue.item.failed': '失败',
 			'queue.open': '打开',
 			'queue.retry': '重试',
+			'queue.remove': '移除',
 			'queue.openAria': '打开该队列项的工作器会话',
 			'queue.retryAria': '恢复该失败项的工作器会话并重试',
+			'queue.removeAria': '从队列中移除该项（运行中的工作器会被取消）',
 			'status.pending': '待执行',
 			'status.active': '进行中',
 			'status.done': '已完成',
@@ -215,8 +218,10 @@ window.__ModuleLoader__.load({
 			'queue.item.failed': 'failed',
 			'queue.open': 'Open',
 			'queue.retry': 'Retry',
+			'queue.remove': 'Remove',
 			'queue.openAria': 'Open this queue item\'s worker session',
 			'queue.retryAria': 'Resume this failed item\'s worker session and retry',
+			'queue.removeAria': 'Remove this item from the queue (a running worker is cancelled)',
 			'status.pending': 'pending',
 			'status.active': 'active',
 			'status.done': 'done',
@@ -386,7 +391,15 @@ window.__ModuleLoader__.load({
 									},
 									title: t('queue.retryAria'),
 								}, t('queue.retry'))
-								: null)))));
+								: null,
+							h('button', {
+								type: 'button',
+								className: 'dsf-queueAction dsf-queueActionRemove',
+								onClick: () => {
+									void postQueueAction({ action: 'remove', id: item.id }).then(refresh);
+								},
+								title: t('queue.removeAria'),
+							}, t('queue.remove')))))));
 		}
 
 		/**

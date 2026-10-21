@@ -345,6 +345,16 @@ check('client: Retry posts the action with the CSRF header',
 	retryPost?.url === '/plugins/@local/dsh-software-factory/queue.json'
 	&& retryPost?.options?.headers?.['x-dsh-factory-action'] === 'queue'
 	&& retryPost?.options?.body === '{"action":"retry","id":"q3"}', { retryPost });
+const removeButtons = haltedTree.filter((node) => typeof node === 'object'
+	&& node.props.className === 'dsf-queueAction dsf-queueActionRemove');
+eq('client: every queue row has a Remove button', removeButtons.length, 3);
+fetchCalls.length = 0;
+removeButtons[0].props.onClick();
+await new Promise((resolve) => { setTimeout(resolve, 20); });
+const removePost = fetchCalls.find((call) => call.options?.method === 'POST');
+check('client: Remove posts the action for that item',
+	removePost?.options?.body === '{"action":"remove","id":"q1"}'
+	&& removePost?.options?.headers?.['x-dsh-factory-action'] === 'queue', { removePost });
 faces['session-1'].set(liveView);
 resetHooks();
 hookStore.length = 0;
@@ -619,6 +629,17 @@ eq('host: queue: retry re-queues the failed item and keeps its worker',
 	[await store.retry(itemC.id), (await store.find(itemC.id))?.status, (await store.find(itemC.id))?.workerSessionId, (await store.find(itemC.id))?.failureReason],
 	[true, 'queued', 'worker-cccc', null]);
 eq('host: queue: retry of the halting item cleared the halt', (await store.snapshot()).halted, false);
+// Remove: any status, halting items lift the halt, unknown ids refused.
+eq('host: queue: remove of an unknown id is refused', await store.remove('q99'), false);
+eq('host: queue: remove drops the item',
+	[await store.remove(itemD.id), (await store.snapshot()).items.some((candidate) => candidate.id === itemD.id)],
+	[true, false]);
+await store.markRunning(itemE.id, 'worker-eeee2');
+await store.markFailed(itemE.id, 'halt me');
+eq('host: queue: remove of the halting item lifts the halt', [
+	await store.remove(itemE.id),
+	(await store.snapshot()).halted,
+], [true, false]);
 
 // ---------------------------------------------------------------------------
 // Enqueue listener + queue command grammar (against the temp DSH home).
@@ -794,10 +815,19 @@ hostServices.sessionProjections = {
     : undefined),
 };
 fireSessionEvent(assistantEvent(9, '[factory] enqueue: {"request":"Route retry target","summary":"Route retry","scopes":["route/"],"clarifications":[]}'));
-await tick();
-await tick();
+// Poll until the dead worker settles (the pump's serialized writes make
+// fixed ticks racy).
+let routeItemSnap = null;
+for (let attempt = 0; attempt < 50 && routeItemSnap === null; attempt += 1) {
+	await tick();
+	try {
+		const snap = await host.createQueueStore({ dir: join(queueHome, 'factory-queue') }).snapshot();
+		routeItemSnap = snap.items.find((item) => item.summary === 'Route retry' && item.status !== 'queued') ?? null;
+	} catch {
+		// A torn read while the runtime atomically replaces the file: retry.
+	}
+}
 const routeBefore = host.createQueueStore({ dir: join(queueHome, 'factory-queue') });
-const routeItemSnap = (await routeBefore.snapshot()).items.find((item) => item.summary === 'Route retry');
 check('host: route fixture: the earlier queued item completed and the dead worker failed',
 	routeItemSnap?.status === 'failed' && routeItemSnap?.failureReason?.includes('turn never started'),
 	{ routeItemSnap });
@@ -839,6 +869,14 @@ eq('host: route: POST retry re-queues, the worker reruns, and the halt lifts', [
 const badActionRes = makeRes();
 await routeHandler(makeReq('POST', { 'x-dsh-factory-action': 'queue' }, JSON.stringify({ action: 'nope' })), badActionRes);
 eq('host: route: unknown action rejected', badActionRes.status, 400);
+const removeRes = makeRes();
+await routeHandler(makeReq('POST', { 'x-dsh-factory-action': 'queue' }, JSON.stringify({ action: 'remove', id: routeItemSnap?.id })), removeRes);
+await tick();
+const routeAfterRemove = host.createQueueStore({ dir: join(queueHome, 'factory-queue') });
+eq('host: route: POST remove drops the item', [
+	removeRes.status,
+	(await routeAfterRemove.snapshot()).items.some((item) => item.id === routeItemSnap?.id),
+], [200, false]);
 const retryUnknown = await commandDef.handler({ agent: fakeAgent, rawInput: 'queue retry q99', attachments: [], signal: undefined });
 eq('host: /factory queue retry of an unknown item is an error', retryUnknown.kind, 'error');
 hostServices.agents = undefined;

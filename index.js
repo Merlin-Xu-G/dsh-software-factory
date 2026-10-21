@@ -214,7 +214,11 @@ export function apply(ctx, config) {
               const requeued = await runtime.retry(id);
               return send(requeued ? 200 : 409, { ok: requeued });
             }
-            return send(400, { error: 'expected {"action":"ack"|"retry","id":…}' });
+            if (body?.action === 'remove' && typeof id === 'string') {
+              const removed = await runtime.remove(id);
+              return send(removed ? 200 : 409, { ok: removed });
+            }
+            return send(400, { error: 'expected {"action":"ack"|"retry"|"remove","id":…}' });
           }
           return send(405, { error: 'GET/HEAD/POST only' });
         } catch (error) {
