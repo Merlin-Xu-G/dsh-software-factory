@@ -138,6 +138,10 @@ window.__ModuleLoader__.load({
 			'.dsf-queueHalted{padding:6px 8px;border:.5px solid var(--dsw-alias-state-error-primary);border-radius:var(--dsw-radius-sm);color:var(--dsw-alias-state-error-primary)}',
 			'.dsf-queueHaltedTitle{font-size:12px}',
 			'.dsf-queueAckHint{font-size:11px;color:var(--dsw-alias-label-secondary)}',
+			'.dsf-queueActions{flex:none;display:flex;flex-direction:column;gap:2px}',
+			'.dsf-queueAction{background:0 0;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-sm);padding:1px 6px;color:var(--dsw-alias-label-secondary);cursor:pointer;font-size:10px;line-height:14px}',
+			'.dsf-queueAction:hover,.dsf-queueAction:focus-visible{background:var(--dsw-alias-fill-l1);color:var(--dsw-alias-label-primary)}',
+			'.dsf-queueActionRetry{color:var(--dsw-alias-state-error-primary)}',
 			'.dsf-last{margin-top:4px;padding:6px 8px;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-fill-l1);font-family:var(--dsw-font-mono);font-size:11px;color:var(--dsw-alias-label-secondary);word-break:break-word}',
 			'.dsf-lastLabel{display:block;margin-bottom:2px;font-size:10px;color:var(--dsw-alias-label-tertiary)}',
 			'.dsf-titleIcon{flex:none}',
@@ -175,6 +179,10 @@ window.__ModuleLoader__.load({
 			'queue.item.running': '运行中',
 			'queue.item.succeeded': '已完成',
 			'queue.item.failed': '失败',
+			'queue.open': '打开',
+			'queue.retry': '重试',
+			'queue.openAria': '打开该队列项的工作器会话',
+			'queue.retryAria': '恢复该失败项的工作器会话并重试',
 			'status.pending': '待执行',
 			'status.active': '进行中',
 			'status.done': '已完成',
@@ -205,6 +213,10 @@ window.__ModuleLoader__.load({
 			'queue.item.running': 'running',
 			'queue.item.succeeded': 'succeeded',
 			'queue.item.failed': 'failed',
+			'queue.open': 'Open',
+			'queue.retry': 'Retry',
+			'queue.openAria': 'Open this queue item\'s worker session',
+			'queue.retryAria': 'Resume this failed item\'s worker session and retry',
 			'status.pending': 'pending',
 			'status.active': 'active',
 			'status.done': 'done',
@@ -293,12 +305,31 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
-		 * The queue page (pure renderer): the global factory queue read model —
-		 * one row per item (id, status, summary, scopes, failure reason), the
-		 * halt banner with its ack hint when a failure froze the queue, and a
-		 * back control returning to the phase list.
+		 * Post one queue action (ack/retry) to the Host route. The custom
+		 * `x-dsh-factory-action` header is the CSRF guard: cross-origin
+		 * requests cannot set it without a preflight this host never answers.
+		 * @param {{action: 'ack' | 'retry', id?: string}} body
+		 * @returns {Promise<boolean>} whether the action succeeded.
 		 */
-		function FactoryQueuePage({ queue, error, t, onBack }) {
+		function postQueueAction(body) {
+			return fetch(QUEUE_URL, {
+				method: 'POST',
+				headers: { 'content-type': 'application/json', 'x-dsh-factory-action': 'queue' },
+				body: JSON.stringify(body),
+			})
+				.then((response) => response.status === 200)
+				.catch(() => false);
+		}
+
+		/**
+		 * The queue page (pure renderer): the global factory queue read model —
+		 * one row per item (id, status, summary, scopes, failure reason) with
+		 * an Open button jumping to the worker session and a Retry button on
+		 * failed rows (resumes that worker), the halt banner with its ack hint
+		 * when a failure froze the queue, and a back control returning to the
+		 * phase list.
+		 */
+		function FactoryQueuePage({ queue, error, t, onBack, refresh }) {
 			const items = Array.isArray(queue?.items) ? queue.items : [];
 			return h('div', { className: 'dsf-root' },
 				h('button', {
@@ -336,6 +367,25 @@ window.__ModuleLoader__.load({
 									: t('queue.wholeWorkspace')),
 							typeof item.failureReason === 'string' && item.failureReason !== ''
 								? h('div', { className: 'dsf-queueFailure' }, item.failureReason)
+								: null),
+						h('div', { className: 'dsf-queueActions' },
+							typeof item.workerSessionId === 'string' && item.workerSessionId !== ''
+								? h('button', {
+									type: 'button',
+									className: 'dsf-queueAction',
+									onClick: () => uiWorkspaceService?.openSession({ kind: 'session', sessionId: item.workerSessionId }),
+									title: t('queue.openAria'),
+								}, t('queue.open'))
+								: null,
+							item.status === 'failed'
+								? h('button', {
+									type: 'button',
+									className: 'dsf-queueAction dsf-queueActionRetry',
+									onClick: () => {
+										void postQueueAction({ action: 'retry', id: item.id }).then(refresh);
+									},
+									title: t('queue.retryAria'),
+								}, t('queue.retry'))
 								: null)))));
 		}
 
@@ -347,6 +397,7 @@ window.__ModuleLoader__.load({
 		function FactoryQueuePageLive({ t, onBack }) {
 			const [queue, setQueue] = useState(null);
 			const [error, setError] = useState(null);
+			const loadRef = { current: null };
 			useEffect(() => {
 				let alive = true;
 				const load = () => {
@@ -362,6 +413,7 @@ window.__ModuleLoader__.load({
 							if (alive) setError('fetch failed');
 						});
 				};
+				loadRef.current = load;
 				load();
 				const timer = setInterval(load, QUEUE_POLL_MS);
 				return () => {
@@ -369,7 +421,15 @@ window.__ModuleLoader__.load({
 					clearInterval(timer);
 				};
 			}, []);
-			return h(FactoryQueuePage, { queue, error, t, onBack });
+			return h(FactoryQueuePage, {
+				queue,
+				error,
+				t,
+				onBack,
+				refresh: () => {
+					loadRef.current?.();
+				},
+			});
 		}
 
 		/**
@@ -452,8 +512,13 @@ window.__ModuleLoader__.load({
 		}
 
 		/** Required client services: the tab-type registry, the navigation
-		 * controller (auto-open), slots, copy, sessions. */
-		const inject = ['sidebarRightTabs', 'sidebarRight', 'slots', 'locale', 'sessions'];
+		 * controller (auto-open), workspace session opening (queue rows),
+		 * slots, copy, sessions. */
+		const inject = ['sidebarRightTabs', 'sidebarRight', 'uiWorkspace', 'slots', 'locale', 'sessions'];
+
+		/** The uiWorkspace service, captured at apply() for the queue rows'
+		 * Open buttons (components receive only hook props). */
+		let uiWorkspaceService = null;
 
 		/**
 		 * Auto-open watcher: subscribe to the on-screen Session observable and,
@@ -512,6 +577,7 @@ window.__ModuleLoader__.load({
 		 * @returns {() => void} cleanup.
 		 */
 		function apply(ctx) {
+			uiWorkspaceService = ctx.uiWorkspace ?? null;
 			ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'software-factory: dictionaries');
 			const t = ctx.locale.bind(NS);
 			ctx.effect(() => ctx.sidebarRightTabs.register({

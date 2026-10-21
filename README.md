@@ -257,30 +257,37 @@ session, executed by **worker sessions** the plugin itself starts:
   `[factory] enqueue: {json}` line; the plugin's host listener turns it into
   a queue item (idempotent per session event, so replays never duplicate).
 - **Workers are root sessions**: each item runs in its own agent session in
-  the item's workspace (visible in the sidebar, titled
-  `Factory queue <id>: <summary>`, with its own live Factory tab), steered
-  with the autonomous pipeline prompt — the clarification answers are
-  binding, and the worker never asks. The worker workspace's own
-  `.factory.yml` applies; an invalid one fails the item loudly.
+  the item's workspace — created with the default model selection (a worker
+  without a model never runs), attached to that workspace so the sidebar
+  groups it, titled by its leading `Factory queue <id>: <summary>` prompt
+  line, with its own live Factory tab — steered with the autonomous pipeline
+  prompt (the clarification answers are binding; the worker never asks). The
+  worker workspace's own `.factory.yml` applies; an invalid one fails the
+  item loudly.
 - **Scheduling**: FIFO with the `queueConcurrency` cap (default 3) and
   write-scope blocking — an item does not start while a running item's
   scopes overlap it in the same workspace (whole-workspace scopes conflict
   with everything there; different workspaces never conflict).
 - **Failure halts the queue** (the configured policy): the item is marked
-  failed with its reason, nothing new starts, and the queue page shows a
-  halt banner until you run `/factory queue ack [id]` — the failed item
-  stays failed, the rest resume.
+  failed with a reason carrying its last narration line, nothing new
+  starts, and the queue page shows a halt banner until you acknowledge
+  (`/factory queue ack [id]`) or **retry** — `/factory queue retry <id>` or
+  the failed row's Retry button resumes the SAME worker session (its
+  transcript and answers carry over) with a retry notice; the halt lifts.
 - **Durability**: the queue is a JSON document under
   `$DSH_HOME/factory-queue/queue.json`, written atomically on every change;
   after a restart, items left running are re-queued (their orphaned worker
   sessions stay in the sidebar) and scheduling resumes.
 - **Queue UI**: the Factory tab's Queue page (from any body state) polls the
-  plugin's read-only same-origin route
-  `/plugins/@local/dsh-software-factory/queue.json` (the shipped
-  client-hmr route pattern) and lists every item — status, scopes, failure
-  reason, halt banner with the ack hint. Acknowledgement is a command, so
-  the route never mutates state. Worker verdicts come from each worker's own
-  `factory` projection board, read host-side — no new status channel.
+  plugin's same-origin route
+  `/plugins/@local/dsh-software-factory/queue.json` and lists every item —
+  status, scopes, failure reason, an Open button jumping to the worker
+  session, and a Retry button on failed rows. GET is the read model; the
+  ack/retry actions POST with a custom `x-dsh-factory-action` header (a
+  non-simple header forces a CORS preflight this host never answers, so
+  other origins cannot forge a POST). Worker verdicts come from each
+  worker's own `factory` projection board, read host-side — no new status
+  channel.
 
 ## Design notes
 

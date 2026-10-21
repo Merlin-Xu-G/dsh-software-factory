@@ -149,43 +149,76 @@ export function apply(ctx, config) {
     });
   });
 
-  // The queue read model: a read-only same-origin JSON route (the shipped
-  // client-hmr route pattern). Acknowledgement stays a command, so this
-  // route never mutates state.
+  // The queue surface: a same-origin JSON route (the shipped client-hmr
+  // route pattern). GET is the read model; POST carries the ack/retry
+  // actions from the queue page's buttons and REQUIRES the custom
+  // `x-dsh-factory-action` header — a non-simple header forces a CORS
+  // preflight on cross-origin requests, which this host never answers, so
+  // other origins cannot forge a POST (classic CSRF cannot set custom
+  // headers without preflight).
   const routeFiber = ctx.inject(['webServer'], (webCtx) => {
     return webCtx.webServer.register({
       kind: 'exact',
       path: '/plugins/@local/dsh-software-factory/queue.json',
       handler: async (req, res) => {
-        if (req.method !== 'GET' && req.method !== 'HEAD') {
-          res.writeHead(405);
-          res.end();
-          return;
-        }
+        const send = (status, payload) => {
+          res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
+          res.end(req.method === 'HEAD' ? undefined : JSON.stringify(payload));
+        };
         try {
-          const queue = await store.snapshot();
-          const body = JSON.stringify({
-            halted: queue.halted,
-            haltedBy: queue.haltedBy,
-            concurrency: resolved.queueConcurrency,
-            items: queue.items.map((item) => ({
-              id: item.id,
-              summary: item.summary,
-              status: item.status,
-              scopes: item.scopes,
-              workspace: item.workspace,
-              workerSessionId: item.workerSessionId,
-              enqueuedAt: item.enqueuedAt,
-              startedAt: item.startedAt,
-              endedAt: item.endedAt,
-              failureReason: item.failureReason,
-            })),
-          });
-          res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-          res.end(req.method === 'HEAD' ? undefined : body);
+          if (req.method === 'GET' || req.method === 'HEAD') {
+            const queue = await store.snapshot();
+            return send(200, {
+              halted: queue.halted,
+              haltedBy: queue.haltedBy,
+              concurrency: resolved.queueConcurrency,
+              items: queue.items.map((item) => ({
+                id: item.id,
+                summary: item.summary,
+                status: item.status,
+                scopes: item.scopes,
+                workspace: item.workspace,
+                workerSessionId: item.workerSessionId,
+                enqueuedAt: item.enqueuedAt,
+                startedAt: item.startedAt,
+                endedAt: item.endedAt,
+                failureReason: item.failureReason,
+              })),
+            });
+          }
+          if (req.method === 'POST') {
+            if (req.headers['x-dsh-factory-action'] !== 'queue') {
+              return send(403, { error: 'missing x-dsh-factory-action: queue header' });
+            }
+            const body = await new Promise((resolve, reject) => {
+              let data = '';
+              req.on('data', (chunk) => {
+                data += chunk;
+                if (data.length > 4096) req.destroy();
+              });
+              req.on('end', () => {
+                try {
+                  resolve(JSON.parse(data));
+                } catch (error) {
+                  reject(error);
+                }
+              });
+              req.on('error', reject);
+            });
+            const id = typeof body?.id === 'string' ? body.id : undefined;
+            if (body?.action === 'ack') {
+              const cleared = await runtime.ack(id);
+              return send(cleared ? 200 : 409, { ok: cleared });
+            }
+            if (body?.action === 'retry' && typeof id === 'string') {
+              const requeued = await runtime.retry(id);
+              return send(requeued ? 200 : 409, { ok: requeued });
+            }
+            return send(400, { error: 'expected {"action":"ack"|"retry","id":…}' });
+          }
+          return send(405, { error: 'GET/HEAD/POST only' });
         } catch (error) {
-          res.writeHead(500, { 'content-type': 'application/json; charset=utf-8' });
-          res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+          return send(500, { error: error instanceof Error ? error.message : String(error) });
         }
       },
     });
