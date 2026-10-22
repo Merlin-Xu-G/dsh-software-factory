@@ -197,12 +197,17 @@ eq('client: guide entry kind is derived (id/order/title/description present)', [
 ], ['factory', 'function', 'function', 'function']);
 eq('client: guide entry title()', tabTypeDef?.guide?.[0]?.title(), 't:tab.title');
 
-eq('client: three seat registrations (body + title)', slotRegisters.map((r) => r.options.name), [
-	'sidebar.right.pane.tab',
-	'sidebar.right.pane.tab.title',
-]);
+eq('client: four seat registrations (tab body + title + queue panel + rail icon)',
+	slotRegisters.map((r) => r.options.name), [
+		'sidebar.right.pane.tab',
+		'sidebar.right.pane.tab.title',
+		'main',
+		'sidebar.panellist',
+	]);
 const bodyRegister = slotRegisters[0];
 const titleRegister = slotRegisters[1];
+const panelRegister = slotRegisters[2];
+const railRegister = slotRegisters[3];
 eq('client: body keyed by the tab type id', bodyRegister.options.key, tabTypeDef.id);
 eq('client: body locale namespace', bodyRegister.options.locale, 'softwareFactory');
 eq('client: title keyed by the tab type id', titleRegister.options.key, tabTypeDef.id);
@@ -292,12 +297,18 @@ faces['session-1'].set(liveView);
 resetHooks();
 hookStore.length = 0;
 
-// Queue page: nav button opens it from any body state; it polls the Host's
-// read-only route (fetch stubbed) and renders items, halt banner, and back.
-let queueSnapshot = { halted: false, items: [
+// Queue panel (the left-sidebar global panel): the rail entry + main-slot
+// page registrations, then the page itself — it polls the Host's read-only
+// route (fetch stubbed) while mounted and renders the stats strip, items,
+// halt banner, and action chips. The tab body has no queue nav any more.
+let queueSnapshot = { halted: false, stats: { queued: 0, running: 1, succeeded: 1, failed: 1, runningVsCap: '1/3' }, items: [
 	{ id: 'q1', status: 'succeeded', summary: 'Retention pipeline', scopes: ['src/retention/'], workerSessionId: 'ws-1' },
-	{ id: 'q2', status: 'running', summary: 'Sidebar bug', scopes: [], workerSessionId: 'ws-2' },
-	{ id: 'q3', status: 'failed', summary: 'Broken thing', scopes: ['src/x/'], failureReason: 'phase 5/9 guardrails failed: lint exit 1 (last: [factory] phase 5/9 guardrails: entering)', workerSessionId: 'ws-3' },
+	{ id: 'q2', status: 'running', summary: 'Sidebar bug', scopes: [], workerSessionId: 'ws-2',
+		agentPreset: 'creator',
+		selection: { provider: 'p-sess', model: 'm-sess', reasoningEffort: 'high' } },
+	{ id: 'q3', status: 'failed', summary: 'Broken thing', scopes: ['src/x/'], failureReason: 'phase 5/9 guardrails failed: lint exit 1 (last: [factory] phase 5/9 guardrails: entering)', workerSessionId: 'ws-3',
+		selection: { provider: 'p-gone', model: 'm-gone' },
+		modelNote: 'captured model p-gone/m-gone is unavailable — running on the default selection' },
 ] };
 const fetchCalls = [];
 globalThis.fetch = (url, options) => {
@@ -305,29 +316,59 @@ globalThis.fetch = (url, options) => {
 	return Promise.resolve({ status: 200, json: () => Promise.resolve(queueSnapshot) });
 };
 const listTree2 = flatten(renderBody(faces['session-1']));
-const queueNav = listTree2.find((node) => typeof node === 'object' && node.props.className === 'dsf-navButton');
-check('client: queue nav button present in the phase list', queueNav?.type === 'button' && typeof queueNav?.props.onClick === 'function');
-queueNav.props.onClick();
-flatten(renderBody(faces['session-1'])); // the effect fires (and fetches) during this render
+check('client: tab body carries no queue nav button (the queue moved to the panel)',
+	!listTree2.some((node) => typeof node === 'object' && node.props.className === 'dsf-navButton'));
+eq('client: queue panel page keyed under main by the panel id', [
+	panelRegister.options.name, panelRegister.options.key, panelRegister.options.locale,
+], ['main', '@local/dsh-software-factory/queue-panel', 'softwareFactory']);
+eq('client: rail entry lists the panel id (first plugin-contributed icon)', [
+	railRegister.options.name, railRegister.options.id, railRegister.options.order, railRegister.options.label(),
+], ['sidebar.panellist', '@local/dsh-software-factory/queue-panel', -10, 't:panel.title']);
+const railTree = flatten(railRegister.component({ size: 18, active: false }));
+check('client: rail icon is the factory glyph at the rail size',
+	railTree.some((node) => typeof node === 'object' && node.type === 'svg' && node.props.width === 18));
+const renderPanel = () => {
+	resetHooks();
+	return flatten(panelRegister.component({ t: (key) => `t:${key}` }));
+};
+renderPanel(); // the panel's mount effect fires (and fetches)
 await new Promise((resolve) => { setTimeout(resolve, 20); }); // data lands in the hook cell
-const queueTree = flatten(renderBody(faces['session-1']));
+const queueTree = renderPanel();
 const itemLegs = ['t:queue.title', 'Retention pipeline', 'Sidebar bug', 'Broken thing'];
-check('client: queue page lists every item with status',
+check('client: queue panel lists every item with status',
 	itemLegs.every((leg) => queueTree.includes(leg))
 	&& queueTree.some((node) => typeof node === 'string' && node.includes('phase 5/9 guardrails failed')));
+check('client: stats strip renders running-vs-cap and counts from the read model',
+	queueTree.some((node) => typeof node === 'string'
+		&& node.includes('1/3 t:queue.item.running')
+		&& node.includes('0 t:queue.item.queued')
+		&& node.includes('1 t:queue.item.failed')),
+	{ strip: queueTree.filter((node) => typeof node === 'string' && node.includes('t:queue.item.running')) });
 check('client: running queue item highlighted',
 	queueTree.some((node) => typeof node === 'object' && node.props.className === 'dsf-queueRow dsf-planRowActive'));
-queueSnapshot = { halted: true, haltedBy: 'q3', items: queueSnapshot.items };
+check('client: queue items render as a semantic ul of li rows',
+	queueTree.some((node) => typeof node === 'object' && node.type === 'ul' && node.props.className === 'dsf-queueList')
+	&& queueTree.filter((node) => typeof node === 'object' && node.type === 'li'
+		&& typeof node.props.className === 'string' && node.props.className.startsWith('dsf-queueRow')).length === 3);
+check('client: queue rows drop the item-number prefix',
+	!queueTree.some((node) => typeof node === 'string' && /^\[q\d+\]$/.test(node)));
+check('client: model·effort chip renders per selection-bearing item (effort appended when set)',
+	queueTree.some((node) => typeof node === 'string' && node.includes('p-sess/m-sess · high')));
+check('client: the chip leads with the inherited MODE when one was captured',
+	queueTree.some((node) => typeof node === 'string' && node.includes('creator · p-sess/m-sess · high')));
+check('client: model chip omits the effort when none was captured, and the fallback note shows',
+	queueTree.some((node) => typeof node === 'string' && node.includes('p-gone/m-gone'))
+	&& !queueTree.some((node) => typeof node === 'string' && /p-gone\/m-gone ·/.test(node))
+	&& queueTree.some((node) => typeof node === 'string'
+		&& node.includes('captured model p-gone/m-gone is unavailable')));
+check('client: panel has no back control (it is a top-level page, not a subpage)',
+	!queueTree.some((node) => typeof node === 'object' && typeof node.props.className === 'string'
+		&& node.props.className.includes('dsf-back')));
+queueSnapshot = { halted: true, haltedBy: 'q3', stats: queueSnapshot.stats, items: queueSnapshot.items };
 await new Promise((resolve) => { setTimeout(resolve, 20); });
-const haltedTree = flatten(renderBody(faces['session-1']));
+const haltedTree = renderPanel();
 check('client: halt banner and ack hint render',
 	haltedTree.includes('t:queue.halted') && haltedTree.includes('t:queue.ackHint'));
-const queueBack = haltedTree.find((node) => typeof node === 'object' && node.props.className === 'dsf-back');
-check('client: queue page has a back control', queueBack?.type === 'button' && typeof queueBack?.props.onClick === 'function');
-queueBack.props.onClick();
-check('client: back returns to the phase list',
-	flatten(renderBody(faces['session-1'])).some((node) => typeof node === 'object'
-		&& typeof node.props.className === 'string' && node.props.className.startsWith('dsf-list')));
 // Open button jumps to the worker session; Retry posts the action then refreshes.
 const openButtons = haltedTree.filter((node) => typeof node === 'object'
 	&& node.props.className === 'dsf-queueAction');
@@ -355,44 +396,96 @@ const removePost = fetchCalls.find((call) => call.options?.method === 'POST');
 check('client: Remove posts the action for that item',
 	removePost?.options?.body === '{"action":"remove","id":"q1"}'
 	&& removePost?.options?.headers?.['x-dsh-factory-action'] === 'queue', { removePost });
-// Clean button: inline two-step confirm sweeping EXACTLY the succeeded rows
-// through the per-item remove action, then auto-resetting.
-queueSnapshot = { halted: false, items: [
+// Clean button: inline two-step confirm sweeping EXACTLY the finished rows
+// (succeeded AND failed) through the per-item remove action, then
+// auto-resetting.
+queueSnapshot = { halted: false, stats: { queued: 1, running: 1, succeeded: 2, failed: 1, runningVsCap: '1/3' }, items: [
 	{ id: 'q1', status: 'succeeded', summary: 'Retention pipeline', scopes: ['src/retention/'], workerSessionId: 'ws-1' },
 	{ id: 'q2', status: 'running', summary: 'Sidebar bug', scopes: [], workerSessionId: 'ws-2' },
 	{ id: 'q3', status: 'failed', summary: 'Broken thing', scopes: ['src/x/'], workerSessionId: 'ws-3' },
 	{ id: 'q4', status: 'queued', summary: 'Queued thing', scopes: [] },
 	{ id: 'q5', status: 'succeeded', summary: 'Exporter', scopes: ['src/export/'], workerSessionId: 'ws-5' },
 ] };
-flatten(renderBody(faces['session-1'])).find((node) => typeof node === 'object'
-	&& node.props.className === 'dsf-navButton').props.onClick();
-flatten(renderBody(faces['session-1'])); // the queue page effect fires (and fetches)
+renderPanel(); // the panel effect fires (and refetches)
 await new Promise((resolve) => { setTimeout(resolve, 20); });
-const cleanButton = findByClass(flatten(renderBody(faces['session-1'])), 'dsf-queueActionClean');
-check('client: Clean button present while succeeded items exist',
-	cleanButton?.type === 'button' && typeof cleanButton?.props.onClick === 'function');
+const cleanButton = findByClass(renderPanel(), 'dsf-queueActionClean');
+check('client: Clean button present and enabled while finished items exist',
+	cleanButton?.type === 'button' && typeof cleanButton?.props.onClick === 'function'
+	&& cleanButton?.props.disabled !== true);
 eq('client: Clean starts disarmed', cleanButton?.children, ['t:queue.clean']);
 fetchCalls.length = 0;
 cleanButton.props.onClick(); // first click only arms
-const confirmButton = findByClass(flatten(renderBody(faces['session-1'])), 'dsf-queueActionClean');
+const confirmButton = findByClass(renderPanel(), 'dsf-queueActionClean');
 eq('client: armed Clean shows the inline Confirm label', confirmButton?.children, ['t:queue.cleanConfirm']);
 eq('client: arming posts nothing yet',
 	fetchCalls.filter((call) => call.options?.method === 'POST').length, 0);
 confirmButton.props.onClick(); // second click executes the sweep
 await new Promise((resolve) => { setTimeout(resolve, 20); });
 const cleanPosts = fetchCalls.filter((call) => call.options?.method === 'POST');
-eq('client: Clean removes exactly the succeeded rows via the per-item remove action',
+eq('client: Clean removes exactly the succeeded AND failed rows via the per-item remove action',
 	cleanPosts.map((call) => call.options?.body),
-	['{"action":"remove","id":"q1"}', '{"action":"remove","id":"q5"}']);
+	['{"action":"remove","id":"q1"}', '{"action":"remove","id":"q3"}', '{"action":"remove","id":"q5"}']);
 check('client: Clean posts reuse the queue action route with the CSRF header',
 	cleanPosts.every((call) => call.options?.headers?.['x-dsh-factory-action'] === 'queue'));
 eq('client: Clean auto-resets after executing',
-	findByClass(flatten(renderBody(faces['session-1'])), 'dsf-queueActionClean')?.children, ['t:queue.clean']);
-queueSnapshot = { halted: false, items: queueSnapshot.items.filter((item) => item.status !== 'succeeded') };
-flatten(renderBody(faces['session-1'])); // the effect refetches the emptied board
+	findByClass(renderPanel(), 'dsf-queueActionClean')?.children, ['t:queue.clean']);
+// Failed-only board: the sweep covers failed rows too, so Clean stays
+// ENABLED with zero succeeded (the old panel hid it here) — the halt cause
+// is sweepable, and sweeping it posts exactly its remove.
+queueSnapshot = { halted: true, haltedBy: 'q3', stats: { queued: 1, running: 1, succeeded: 0, failed: 1, runningVsCap: '1/3' }, items: [
+	{ id: 'q2', status: 'running', summary: 'Sidebar bug', scopes: [], workerSessionId: 'ws-2' },
+	{ id: 'q3', status: 'failed', summary: 'Broken thing', scopes: ['src/x/'], workerSessionId: 'ws-3' },
+	{ id: 'q4', status: 'queued', summary: 'Queued thing', scopes: [] },
+] };
+renderPanel(); // the effect refetches the changed board
 await new Promise((resolve) => { setTimeout(resolve, 20); });
-check('client: no succeeded rows means no Clean button',
-	findByClass(flatten(renderBody(faces['session-1'])), 'dsf-queueActionClean') === undefined);
+const failedOnlyClean = findByClass(renderPanel(), 'dsf-queueActionClean');
+check('client: Clean stays enabled with only failed rows to sweep (halt cause included)',
+	failedOnlyClean?.props?.disabled !== true
+	&& failedOnlyClean?.props?.title === 't:queue.cleanAria'
+	&& failedOnlyClean?.children?.[0] === 't:queue.clean',
+	{ props: failedOnlyClean?.props });
+fetchCalls.length = 0;
+failedOnlyClean.props.onClick(); // arm
+findByClass(renderPanel(), 'dsf-queueActionClean').props.onClick(); // confirm
+await new Promise((resolve) => { setTimeout(resolve, 20); });
+eq('client: the failed-only sweep posts remove for the failed row (the Host lifts the halt)',
+	fetchCalls.filter((call) => call.options?.method === 'POST').map((call) => call.options?.body),
+	['{"action":"remove","id":"q3"}']);
+// Nothing cleanable (running/queued rows only): the control stays VISIBLE,
+// disabled behind the explanatory tooltip (always discoverable).
+queueSnapshot = { halted: false, stats: { queued: 1, running: 1, succeeded: 0, failed: 0, runningVsCap: '1/3' }, items: [
+	{ id: 'q2', status: 'running', summary: 'Sidebar bug', scopes: [], workerSessionId: 'ws-2' },
+	{ id: 'q4', status: 'queued', summary: 'Queued thing', scopes: [] },
+] };
+renderPanel();
+await new Promise((resolve) => { setTimeout(resolve, 20); });
+const disabledClean = findByClass(renderPanel(), 'dsf-queueActionClean');
+check('client: Clean is always visible — disabled with the explanatory tooltip when nothing is cleanable',
+	disabledClean?.type === 'button'
+	&& disabledClean?.props?.disabled === true
+	&& disabledClean?.props?.title === 't:queue.cleanDisabled'
+	&& disabledClean?.props?.['aria-label'] === 't:queue.cleanAria'
+	&& disabledClean?.children?.[0] === 't:queue.clean',
+	{ props: disabledClean?.props });
+// Empty and load-error states render the quiet hints.
+queueSnapshot = { halted: false, stats: { queued: 0, running: 0, succeeded: 0, failed: 0, runningVsCap: '0/3' }, items: [] };
+renderPanel();
+await new Promise((resolve) => { setTimeout(resolve, 20); });
+const emptyTree2 = renderPanel();
+check('client: empty queue shows the empty-state hint', emptyTree2.includes('t:queue.empty'));
+const emptyClean = findByClass(emptyTree2, 'dsf-queueActionClean');
+check('client: empty queue keeps Clean visible but disabled (numbering restarts at q1 host-side)',
+	emptyClean?.props?.disabled === true && emptyClean?.props?.title === 't:queue.cleanDisabled',
+	{ props: emptyClean?.props });
+const realFetch = globalThis.fetch;
+globalThis.fetch = () => Promise.reject(new Error('offline'));
+hookStore.length = 0; // fresh mount: no snapshot yet, so the fetch failure shows
+renderPanel(); // the failing fetch marks the error state
+await new Promise((resolve) => { setTimeout(resolve, 20); });
+check('client: failed fetch shows the quiet load-error message (next poll retries)',
+	renderPanel().includes('t:queue.loadError'));
+globalThis.fetch = realFetch;
 faces['session-1'].set(liveView);
 resetHooks();
 hookStore.length = 0;
@@ -521,9 +614,9 @@ const log = [
 	assistantEvent(6, '[factory] phase 4/9 review: diff reviewed, 2 findings fixed'),
 	assistantEvent(7, '[factory] phase 5/9 guardrails: lint+typecheck clean'),
 	assistantEvent(8, '[factory] phase 6/9 test: 42 passed'),
-	assistantEvent(9, '[factory] phase 7/9 deploy: skipped (no test environment configured)'),
-	assistantEvent(10, '[factory] phase 8/9 regression: no suite exists, skipped'),
-	assistantEvent(11, '[factory] phase 9/9 evaluate: verdict — all acceptance criteria met'),
+	assistantEvent(9, '[factory] phase 7/9 deploy: skip (no test environment configured)'),
+	assistantEvent(10, '[factory] phase 8/9 regression: skip — no suite exists, none found'),
+	assistantEvent(11, '[factory] phase 9/9 evaluate: pass — all acceptance criteria met'),
 ];
 for (const event of log) state = projectionDef.apply(state, event);
 const view = projectionDef.wire.view(state);
@@ -532,20 +625,37 @@ projectionDef.stateSchema.parse(state);
 eq('host: folded statuses after a full run', view.phases.map((p) => p.status),
 	['done', 'done', 'done', 'done', 'done', 'done', 'skipped', 'skipped', 'done']);
 eq('host: run finished', view.running, false);
-eq('host: lastLine kept verbatim', view.lastLine, '[factory] phase 9/9 evaluate: verdict — all acceptance criteria met');
+eq('host: lastLine kept verbatim', view.lastLine, '[factory] phase 9/9 evaluate: pass — all acceptance criteria met');
 
 // Failure + fresh-run semantics.
 let state2 = projectionDef.init({}, 0);
 for (const event of [
 	assistantEvent(1, '[factory] phase 1/9 capture: restated'),
-	assistantEvent(2, '[factory] phase 2/9 plan: failed to converge, blocked'),
+	assistantEvent(2, '[factory] phase 2/9 plan: fail — could not converge, blocked'),
 ]) state2 = projectionDef.apply(state2, event);
 const view2 = projectionDef.wire.view(state2);
-eq('host: blocked text marks the phase failed', view2.phases[1].status, 'failed');
+eq('host: leading fail verdict marks the phase failed', view2.phases[1].status, 'failed');
 eq('host: failed run stays running (until phase 9 or a fresh run)', view2.running, true);
 state2 = projectionDef.apply(state2, assistantEvent(3, '[factory] phase 1/9 capture: retry'));
 const view3 = projectionDef.wire.view(state2);
 eq('host: phase-1 line after a settled run starts a fresh run', [view3.phases[0].status, view3.phases[1].status], ['active', 'pending']);
+
+// v6 verdict-token contract: only the LEAVE line's LEADING verdict word
+// decides the icon — honest prose after it can never flip a passing phase,
+// and mid-sentence verdict words in an enter line are ignored.
+let stateV = projectionDef.init({}, 0);
+stateV = projectionDef.apply(stateV, assistantEvent(1, '[factory] phase 1/9 capture: pass — request restated'));
+stateV = projectionDef.apply(stateV, assistantEvent(2, '[factory] phase 2/9 plan: pass — 5 tasks, no failure, zero regressions'));
+const viewV = projectionDef.wire.view(stateV);
+projectionDef.wire.viewSchema.parse(viewV);
+eq('host: failure prose after a pass verdict cannot flip the phase',
+	[viewV.phases[0].status, viewV.phases[1].status], ['done', 'done']);
+stateV = projectionDef.apply(stateV, assistantEvent(3, '[factory] phase 3/9 implement: implementing task 2/5 (recovering from an error)'));
+eq('host: enter line without a verdict stays active despite failure words',
+	projectionDef.wire.view(stateV).phases[2].status, 'active');
+stateV = projectionDef.apply(stateV, assistantEvent(4, '[factory] phase 4/9 review: pass — diff reviewed, 2 findings fixed'));
+eq('host: pass verdict on a mid run closes the phase as done',
+	projectionDef.wire.view(stateV).phases[2].status, 'done');
 
 // The nine-phase identity rejects legacy eight-phase states (the v4 bump).
 let legacyRejected = false;
@@ -678,6 +788,20 @@ eq('host: queue: remove of the halting item lifts the halt', [
 	await store.remove(itemE.id),
 	(await store.snapshot()).halted,
 ], [true, false]);
+// Reset-on-empty: the counter resets only the moment zero rows remain —
+// removals with survivors keep it monotonic (survivors never renumber),
+// and the next enqueue after an emptied queue is q1 again (the Clean sweep
+// lands here too: it is repeated removes).
+eq('host: queue: remove while rows survive keeps the monotonic counter', [
+	await store.remove(itemB.id),
+	(await store.snapshot()).nextId,
+], [true, 6]);
+await store.remove(itemA.id);
+await store.remove(itemC.id);
+eq('host: queue: emptying the queue resets nextId to 1',
+	[(await store.snapshot()).items.length, (await store.snapshot()).nextId], [0, 1]);
+eq('host: queue: the next enqueue after an emptied queue is q1 again',
+	(await store.enqueue({ request: 'Numbering restart', workspace: '/repo/a', scopes: [] })).id, 'q1');
 
 // ---------------------------------------------------------------------------
 // Enqueue listener + queue command grammar (against the temp DSH home).
@@ -875,17 +999,241 @@ check('host: orchestrator: resume mounts the header-recorded preset on the resum
 eq('host: orchestrator: resumed worker settles succeeded',
   (await orchStore2.find(resumeItem.id))?.status, 'succeeded');
 
+// ---------------------------------------------------------------------------
+// Worker model inheritance (q4): the enqueue listener snapshots the START
+// session's effective selection (pending model/selection event, else the
+// last request header with adapter-defaulted effort skipped, else the
+// global default), the enqueue JSON may override provider/model/effort
+// per-field leniently, and workers — create AND resume — receive the
+// item's snapshot as agentOptions (legacy items and absent selections run
+// on the full default selection, effort included; an unavailable captured
+// model falls back to the default with a recorded note, never a failure).
+// ---------------------------------------------------------------------------
+const selHome = mkdtempSync(join(tmpdir(), 'factory-sel-home-'));
+const selPreviousHome = process.env.DSH_HOME;
+process.env.DSH_HOME = selHome;
+const selListeners = [];
+const selServices = {};
+const selCtx = {
+	inject(deps, callback) {
+		if (deps.includes('sessionProjections')) callback({ sessionProjections: { register: () => () => {} } });
+		else if (deps.includes('commands')) callback({ commands: { register: () => () => {} } });
+		else if (deps.includes('webServer')) callback({ webServer: { register: () => () => {} } });
+		return { dispose() {} };
+	},
+	on(event, handler) { if (event === 'session/event') selListeners.push(handler); return () => {}; },
+	get: (name) => selServices[name],
+	logger: { warn() {} },
+};
+host.apply(selCtx, {});
+const fireSelEvent = (session, seq, payloadLine) => {
+	for (const handler of selListeners) handler(session, assistantEvent(seq, payloadLine));
+};
+// A start session whose effective selection lives in the projection's
+// PENDING slot (selected, not yet consumed by a request).
+const pendingSession = {
+	id: 'sel-pending', header: { cwd: workspace },
+	requestHeader: () => ({ config: { provider: 'p-header', model: 'm-header', reasoningEffort: 'high' } }),
+};
+selServices.sessionProjections = {
+	stateOf: (session, key) => {
+		if (key === 'agentPreset') return session === pendingSession ? 'creator' : null;
+		if (key !== 'modelSelection') return undefined;
+		return session === pendingSession
+			? { lastUsed: null, pending: { provider: 'p-pending', model: 'm-pending', reasoningEffort: 'low' } }
+			: { lastUsed: null, pending: null };
+	},
+};
+selServices.agentDefaultModel = { currentSelection: () => ({ provider: 'p-default', model: 'm-default', reasoningEffort: 'medium' }) };
+fireSelEvent(pendingSession, 1, '[factory] enqueue: {"request":"Pending selection","summary":"SelPending","scopes":[],"clarifications":[]}');
+await tick();
+await tick();
+// A session with NO pending selection but a last request header whose
+// effort is adapter-defaulted (must be skipped; provider/model kept).
+const headerSession = {
+	id: 'sel-header', header: { cwd: workspace },
+	requestHeader: () => ({ config: { provider: 'p-header', model: 'm-header', reasoningEffort: 'adapterDefault' }, adapterDefaults: { reasoningEffort: true } }),
+};
+fireSelEvent(headerSession, 2, '[factory] enqueue: {"request":"Header selection","summary":"SelHeader","scopes":[],"clarifications":[]}');
+// Per-field JSON override: only the effort is named, the captured route stays.
+fireSelEvent(pendingSession, 3, '[factory] enqueue: {"request":"Effort override","summary":"SelEffort","scopes":[],"clarifications":[],"reasoningEffort":"max"}');
+// Invalid JSON fields are dropped leniently (wrong types and blanks).
+fireSelEvent(pendingSession, 4, '[factory] enqueue: {"request":"Invalid override","summary":"SelInvalid","scopes":[],"clarifications":[],"provider":7,"model":"","reasoningEffort":null}');
+await tick();
+await tick();
+const selStore = host.createQueueStore({ dir: join(selHome, 'factory-queue') });
+const selSnap = await selStore.snapshot();
+const selBy = (summary) => selSnap.items.find((item) => item.summary === summary)?.selection ?? undefined;
+eq('host: listener snapshots the start session\'s PENDING selection (effort included)',
+	selBy('SelPending'), { provider: 'p-pending', model: 'm-pending', reasoningEffort: 'low' });
+eq('host: listener snapshots the start session\'s MODE (agent preset)',
+	selSnap.items.find((item) => item.summary === 'SelPending')?.agentPreset, 'creator');
+eq('host: listener leaves the preset null when the session records none',
+	selSnap.items.find((item) => item.summary === 'SelHeader')?.agentPreset, null);
+eq('host: listener falls back to the last request header, skipping adapter-defaulted effort',
+	selBy('SelHeader'), { provider: 'p-header', model: 'm-header' });
+eq('host: JSON per-field override wins (effort only, captured route kept)',
+	selBy('SelEffort'), { provider: 'p-pending', model: 'm-pending', reasoningEffort: 'max' });
+eq('host: invalid JSON-named fields are dropped, captured selection kept',
+	selBy('SelInvalid'), { provider: 'p-pending', model: 'm-pending', reasoningEffort: 'low' });
+
+// Orchestrator: workers receive the snapshot; legacy and absent selections
+// run on the full default (effort included); an unavailable captured model
+// falls back to the default with a note; retry/resume reuses the snapshot.
+const selOrchHome = mkdtempSync(join(tmpdir(), 'factory-sel-orch-'));
+const selOrchStore = host.createQueueStore({ dir: selOrchHome });
+const selLog = { created: [], resumed: [], attached: [], followups: [] };
+const selOrchServices = {
+	agents: makeAgentsSurface(selLog, { liveCreated: false }),
+	agentDefaultModel: { currentSelection: () => ({ provider: 'p-default', model: 'm-default', reasoningEffort: 'medium' }) },
+	agentPresets: fakePresets,
+	workspaceRegistry: { list: () => [] },
+	sessionProjections: { stateOf: () => boardForWorker() },
+};
+const selOrchCtx = { get: (name) => selOrchServices[name] };
+const selRuntime = createQueueRuntime(selOrchCtx, defaults, selOrchStore);
+fakeSeq = 42;
+boardForWorker = () => ({
+	running: false, runCount: 0, plan: null,
+	lastLine: '[factory] phase 9/9 evaluate: done',
+	phases: Array.from({ length: 9 }, (_, index) => ({ n: index + 1, key: `p${index}`, status: 'done', text: null })),
+});
+const inheritItem = await selRuntime.enqueueAndPump({
+	request: 'Inherit my model', summary: 'Inherit', workspace: orchWorkspace, scopes: ['inherit/'],
+	selection: { provider: 'p-session', model: 'm-session', reasoningEffort: 'high' },
+	agentPreset: 'creator',
+});
+const legacyItem = await selRuntime.enqueueAndPump({
+	request: 'Legacy item', summary: 'Legacy', workspace: orchWorkspace, scopes: ['legacy/'],
+});
+await tick();
+await tick();
+eq('host: orchestrator: worker created with the item\'s snapshot selection (model AND effort)',
+	selLog.created[0]?.agentOptions, { provider: 'p-session', model: 'm-session', reasoningEffort: 'high' });
+eq('host: orchestrator: worker composed under the item\'s captured MODE, recorded in its header',
+	selLog.created[0]?.meta?.agentPreset, 'creator');
+eq('host: orchestrator: legacy item without a snapshot runs on the full default (effort kept)',
+	selLog.created[1]?.agentOptions, { provider: 'p-default', model: 'm-default', reasoningEffort: 'medium' });
+eq('host: orchestrator: legacy item without a captured mode composes the DEFAULT preset',
+	selLog.created[1]?.meta?.agentPreset, 'standard');
+check('host: orchestrator: the captured mode\'s tool tree was mounted',
+	presetLog.mounted.some(({ id }) => id === 'creator'),
+	{ mounted: presetLog.mounted.map(({ id }) => id) });
+eq('host: orchestrator: both model-inheritance workers settle succeeded', [
+	(await selOrchStore.find(inheritItem.id))?.status,
+	(await selOrchStore.find(legacyItem.id))?.status,
+], ['succeeded', 'succeeded']);
+// A snapshot worker that fails keeps its snapshot; retry RESUMES the same
+// session under that same enqueue-time selection.
+fakeSeq = 0;
+boardForWorker = () => undefined;
+const retryItem = await selRuntime.enqueueAndPump({
+	request: 'Fail then retry', summary: 'FailRetry', workspace: orchWorkspace, scopes: ['retry/'],
+	selection: { provider: 'p-session', model: 'm-session', reasoningEffort: 'high' },
+});
+await tick();
+await tick();
+const retryFailed = await selOrchStore.find(retryItem.id);
+eq('host: orchestrator: snapshot item fails on a dead worker (snapshot untouched)',
+	[retryFailed?.status, retryFailed?.selection],
+	['failed', { provider: 'p-session', model: 'm-session', reasoningEffort: 'high' }]);
+fakeSeq = 42;
+boardForWorker = () => ({
+	running: false, runCount: 0, plan: null,
+	lastLine: '[factory] phase 9/9 evaluate: done',
+	phases: Array.from({ length: 9 }, (_, index) => ({ n: index + 1, key: `p${index}`, status: 'done', text: null })),
+});
+await selRuntime.retry(retryItem.id);
+await tick();
+await tick();
+eq('host: orchestrator: retry RESUMES the worker under the same enqueue-time snapshot',
+	selLog.resumed[0]?.agentOptions, { provider: 'p-session', model: 'm-session', reasoningEffort: 'high' });
+eq('host: orchestrator: resumed snapshot worker settles succeeded',
+	(await selOrchStore.find(retryItem.id))?.status, 'succeeded');
+eq('host: orchestrator: no model fallback note while the snapshot runs',
+	(await selOrchStore.find(retryItem.id))?.modelNote, null);
+
+// Unavailable captured model: the llm registry does not list it → default
+// fallback + note, and the item is NEVER failed for the missing model.
+const unavailableHome = mkdtempSync(join(tmpdir(), 'factory-sel-unavail-'));
+const unavailableStore = host.createQueueStore({ dir: unavailableHome });
+const unavailLog = { created: [], resumed: [], attached: [], followups: [] };
+const unavailServices = {
+	agents: makeAgentsSurface(unavailLog),
+	agentDefaultModel: { currentSelection: () => ({ provider: 'p-default', model: 'm-default', reasoningEffort: 'medium' }) },
+	agentPresets: fakePresets,
+	workspaceRegistry: { list: () => [] },
+	sessionProjections: { stateOf: () => boardForWorker() },
+	llm: {
+		listProviders: () => [{ id: 'p-default' }],
+		listModels: async (provider) => (provider === 'p-default' ? [{ id: 'm-default' }] : []),
+	},
+};
+const unavailRuntime = createQueueRuntime({ get: (name) => unavailServices[name] }, defaults, unavailableStore);
+const unavailItem = await unavailRuntime.enqueueAndPump({
+	request: 'Ghost model', summary: 'Ghost', workspace: orchWorkspace, scopes: [],
+	selection: { provider: 'p-gone', model: 'm-gone', reasoningEffort: 'high' },
+});
+await tick();
+await tick();
+eq('host: orchestrator: unavailable captured model falls back to the default selection',
+	unavailLog.created[0]?.agentOptions, { provider: 'p-default', model: 'm-default', reasoningEffort: 'medium' });
+const unavailSnap = await unavailableStore.find(unavailItem.id);
+check('host: orchestrator: fallback recorded as a note, never a failure',
+	unavailSnap?.status !== 'failed'
+	&& typeof unavailSnap?.modelNote === 'string'
+	&& unavailSnap.modelNote.includes('p-gone/m-gone'),
+	{ unavailSnap });
+
+// Unavailable captured MODE: the preset registry cannot resolve it →
+// default-preset fallback + note, and the item is NEVER failed for it.
+const gonePresetHome = mkdtempSync(join(tmpdir(), 'factory-sel-preset-'));
+const gonePresetStore = host.createQueueStore({ dir: gonePresetHome });
+const gonePresetLog = { created: [], resumed: [], attached: [], followups: [] };
+const gonePresetServices = {
+	agents: makeAgentsSurface(gonePresetLog),
+	agentDefaultModel: { currentSelection: () => ({ provider: 'p-default', model: 'm-default' }) },
+	agentPresets: {
+		async resolve(id) { if (id !== undefined && id !== 'standard') throw new Error(`Unknown agent preset: ${id}`); return { id: id ?? 'standard' }; },
+		async mount(ctxArg, id) { presetLog.mounted.push({ ctx: ctxArg, id }); return { id }; },
+	},
+	workspaceRegistry: { list: () => [] },
+	sessionProjections: { stateOf: () => boardForWorker() },
+};
+const gonePresetRuntime = createQueueRuntime({ get: (name) => gonePresetServices[name] }, defaults, gonePresetStore);
+const gonePresetItem = await gonePresetRuntime.enqueueAndPump({
+	request: 'Ghost mode', summary: 'GhostMode', workspace: orchWorkspace, scopes: [],
+	agentPreset: 'removed-mode',
+});
+await tick();
+await tick();
+eq('host: orchestrator: unresolvable captured mode falls back to the DEFAULT preset',
+	gonePresetLog.created[0]?.meta?.agentPreset, 'standard');
+const gonePresetSnap = await gonePresetStore.find(gonePresetItem.id);
+check('host: orchestrator: mode fallback recorded as a note, never a failure',
+	gonePresetSnap?.status !== 'failed'
+		&& typeof gonePresetSnap?.modelNote === 'string'
+		&& gonePresetSnap.modelNote.includes('captured mode removed-mode'),
+	{ gonePresetSnap });
+// The queue list output stays model-free (only the queue page shows chips).
+const selStatusText = await selRuntime.statusText();
+check('host: /factory queue list output carries no model chip',
+	!selStatusText.includes('p-session') && !selStatusText.includes('m-session'), { selStatusText });
+process.env.DSH_HOME = selPreviousHome;
+
 // Route POST actions: drive a REAL failure through the apply()-wired
 // runtime (a second store instance's writes are invisible to its cached
 // state). The fake agents surface's first worker completes (the listener
-// item queued earlier); its second worker is dead (zero events) and fails,
+// item queued earlier); workers #2 and #3 are dead (zero events) and fail,
 // halting the queue — then the POST actions run against that live state.
 let routeCreatedCount = 0;
 hostServices.agents = {
   get: () => undefined,
   async create(options) {
     routeCreatedCount += 1;
-    const healthy = routeCreatedCount !== 2;
+    // Workers #2 and #3 are dead (zero events): one failure exercises the
+    // retry action, the other the Clean sweep's halt lift.
+    const healthy = routeCreatedCount !== 2 && routeCreatedCount !== 3;
     return {
       agent: {
         session: { id: options.sessionId, header: { cwd: options.meta?.cwd }, get seq() { return healthy ? 42 : 0; } },
@@ -968,6 +1316,14 @@ eq('host: route: POST retry re-queues, the worker reruns, and the halt lifts', [
 	routeAfterSnap.items.find((item) => item.id === routeItemSnap?.id)?.status,
 	routeAfterSnap.halted,
 ], [200, 'succeeded', false]);
+eq('host: route: GET stats count every item and carry running-vs-cap', [
+	routeAfterSnap.stats?.queued + routeAfterSnap.stats?.running
+		+ routeAfterSnap.stats?.succeeded + routeAfterSnap.stats?.failed,
+	routeAfterSnap.stats?.runningVsCap,
+], [
+	routeAfterSnap.items.length,
+	`${routeAfterSnap.stats?.running}/${routeAfterSnap.concurrency}`,
+]);
 const badActionRes = makeRes();
 await routeHandler(makeReq('POST', { 'x-dsh-factory-action': 'queue' }, JSON.stringify({ action: 'nope' })), badActionRes);
 eq('host: route: unknown action rejected', badActionRes.status, 400);
@@ -978,6 +1334,45 @@ eq('host: route: POST remove drops the item', [
 	removeRes.status,
 	(await routeSnapshot()).items.some((item) => item.id === routeItemSnap?.id),
 ], [200, false]);
+// Clean through the route (the sweep is repeated per-item removes): a dead
+// worker fails and HALTS the queue; removing the failed row lifts the halt
+// while a succeeded row survives; removing the last row then empties the
+// queue, and the persisted counter restarts at 1 (the next enqueue is q1 —
+// proven on the store above; the route exposes no enqueue endpoint).
+fireSessionEvent(assistantEvent(11, '[factory] enqueue: {"request":"Route clean target","summary":"Route clean","scopes":["route2/"],"clarifications":[]}'));
+let routeCleanSnap = null;
+let routeCleanHalted = false;
+// 250×20ms (5s) ceiling: the settle chain is fast, but a loaded machine
+// (suites running back-to-back) can stretch it past a tighter budget.
+for (let attempt = 0; attempt < 250 && routeCleanSnap === null; attempt += 1) {
+	await tick();
+	const snap = await routeSnapshot();
+	routeCleanHalted = snap.halted === true;
+	routeCleanSnap = snap.items.find((item) => item.summary === 'Route clean' && item.status === 'failed') ?? null;
+}
+eq('host: route: the clean fixture dead worker failed and halted the queue', [
+	routeCleanSnap !== null,
+	routeCleanHalted,
+], [true, true]);
+const sweepRemoveRes = makeRes();
+await routeHandler(makeReq('POST', { 'x-dsh-factory-action': 'queue' }, JSON.stringify({ action: 'remove', id: routeCleanSnap?.id })), sweepRemoveRes);
+await tick();
+const afterSweepRemove = await routeSnapshot();
+eq('host: route: the sweep removing the halt-causing failure lifts the halt', [
+	sweepRemoveRes.status,
+	afterSweepRemove.halted,
+	afterSweepRemove.items.some((item) => item.id === routeCleanSnap?.id),
+], [200, false, false]);
+const lastRowRes = makeRes();
+await routeHandler(makeReq('POST', { 'x-dsh-factory-action': 'queue' }, JSON.stringify({ action: 'remove', id: afterSweepRemove.items[0]?.id })), lastRowRes);
+await tick();
+eq('host: route: removing the last row empties the queue', [
+	lastRowRes.status,
+	(await routeSnapshot()).items.length,
+], [200, 0]);
+const routeStoreFresh = host.createQueueStore({ dir: join(queueHome, 'factory-queue') });
+eq('host: route: the emptied route queue persists the numbering reset at q1',
+	[(await routeStoreFresh.snapshot()).items.length, (await routeStoreFresh.snapshot()).nextId], [0, 1]);
 const retryUnknown = await commandDef.handler({ agent: fakeAgent, rawInput: 'queue retry q99', attachments: [], signal: undefined });
 eq('host: /factory queue retry of an unknown item is an error', retryUnknown.kind, 'error');
 hostServices.agents = undefined;

@@ -1,9 +1,9 @@
 {
   "name": "@local/dsh-software-factory",
-  "version": "0.7.0",
+  "version": "0.8.1",
   "private": true,
   "type": "module",
-  "description": "Adds the /factory slash command: a managed 9-phase software-delivery pipeline (capture, plan, implement, review, guardrails, test, deploy, regression, evaluate) driven through DSH-native machinery, with clarify-first grilling, a right-sidebar progress tab, and a global worker queue in the Web client.",
+  "description": "Adds the /factory slash command: a managed 9-phase software-delivery pipeline (capture, plan, implement, review, guardrails, test, deploy, regression, evaluate) driven through DSH-native machinery, with clarify-first grilling, a right-sidebar progress tab, and a global worker queue observed in a left-sidebar panel in the Web client.",
   "scripts": {
     "test": "node test/smoke.mjs && node test/prompt-equivalence.mjs"
   },
