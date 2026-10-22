@@ -355,6 +355,44 @@ const removePost = fetchCalls.find((call) => call.options?.method === 'POST');
 check('client: Remove posts the action for that item',
 	removePost?.options?.body === '{"action":"remove","id":"q1"}'
 	&& removePost?.options?.headers?.['x-dsh-factory-action'] === 'queue', { removePost });
+// Clean button: inline two-step confirm sweeping EXACTLY the succeeded rows
+// through the per-item remove action, then auto-resetting.
+queueSnapshot = { halted: false, items: [
+	{ id: 'q1', status: 'succeeded', summary: 'Retention pipeline', scopes: ['src/retention/'], workerSessionId: 'ws-1' },
+	{ id: 'q2', status: 'running', summary: 'Sidebar bug', scopes: [], workerSessionId: 'ws-2' },
+	{ id: 'q3', status: 'failed', summary: 'Broken thing', scopes: ['src/x/'], workerSessionId: 'ws-3' },
+	{ id: 'q4', status: 'queued', summary: 'Queued thing', scopes: [] },
+	{ id: 'q5', status: 'succeeded', summary: 'Exporter', scopes: ['src/export/'], workerSessionId: 'ws-5' },
+] };
+flatten(renderBody(faces['session-1'])).find((node) => typeof node === 'object'
+	&& node.props.className === 'dsf-navButton').props.onClick();
+flatten(renderBody(faces['session-1'])); // the queue page effect fires (and fetches)
+await new Promise((resolve) => { setTimeout(resolve, 20); });
+const cleanButton = findByClass(flatten(renderBody(faces['session-1'])), 'dsf-queueActionClean');
+check('client: Clean button present while succeeded items exist',
+	cleanButton?.type === 'button' && typeof cleanButton?.props.onClick === 'function');
+eq('client: Clean starts disarmed', cleanButton?.children, ['t:queue.clean']);
+fetchCalls.length = 0;
+cleanButton.props.onClick(); // first click only arms
+const confirmButton = findByClass(flatten(renderBody(faces['session-1'])), 'dsf-queueActionClean');
+eq('client: armed Clean shows the inline Confirm label', confirmButton?.children, ['t:queue.cleanConfirm']);
+eq('client: arming posts nothing yet',
+	fetchCalls.filter((call) => call.options?.method === 'POST').length, 0);
+confirmButton.props.onClick(); // second click executes the sweep
+await new Promise((resolve) => { setTimeout(resolve, 20); });
+const cleanPosts = fetchCalls.filter((call) => call.options?.method === 'POST');
+eq('client: Clean removes exactly the succeeded rows via the per-item remove action',
+	cleanPosts.map((call) => call.options?.body),
+	['{"action":"remove","id":"q1"}', '{"action":"remove","id":"q5"}']);
+check('client: Clean posts reuse the queue action route with the CSRF header',
+	cleanPosts.every((call) => call.options?.headers?.['x-dsh-factory-action'] === 'queue'));
+eq('client: Clean auto-resets after executing',
+	findByClass(flatten(renderBody(faces['session-1'])), 'dsf-queueActionClean')?.children, ['t:queue.clean']);
+queueSnapshot = { halted: false, items: queueSnapshot.items.filter((item) => item.status !== 'succeeded') };
+flatten(renderBody(faces['session-1'])); // the effect refetches the emptied board
+await new Promise((resolve) => { setTimeout(resolve, 20); });
+check('client: no succeeded rows means no Clean button',
+	findByClass(flatten(renderBody(faces['session-1'])), 'dsf-queueActionClean') === undefined);
 faces['session-1'].set(liveView);
 resetHooks();
 hookStore.length = 0;
@@ -685,8 +723,11 @@ check('host: -q short flag also enqueues', enqueueQ.kind === 'success' && steere
 // ---------------------------------------------------------------------------
 // Orchestrator end-to-end (isolated runtime over its own store): catches the
 // dead-turn bug — create must carry agentOptions, the worker must be
-// attached to its workspace, a zero-event worker fails loudly, a completing
-// worker succeeds, and retry resumes the SAME session.
+// composed with the default agent PRESET (meta.agentPreset + a setup that
+// mounts the preset's tool tree — the tool-less-worker bug) and attached to
+// its workspace, a zero-event worker fails loudly, a completing worker
+// succeeds, retry resumes the SAME session, and the resume path re-mounts
+// the preset the session header recorded.
 // ---------------------------------------------------------------------------
 const { createQueueRuntime } = await import(pathToFileURL(join(repoRoot, 'lib', 'orchestrator.js')).href);
 const orchWorkspace = mkdtempSync(join(tmpdir(), 'factory-orch-ws-'));
@@ -695,44 +736,48 @@ const orchStore = host.createQueueStore({ dir: orchHome });
 const agentLog = { created: [], resumed: [], attached: [], followups: [] };
 let fakeSeq = 0;
 let boardForWorker = () => undefined;
-const makeFakeAgent = (sessionId, cwd) => ({
+// Fake agentPresets registry: resolve() answers the default ('standard');
+// mount() records the agent context it was handed (the tool-tree mount).
+const presetLog = { resolved: [], mounted: [] };
+const fakePresets = {
+	async resolve(id) { presetLog.resolved.push(id); return { id: id ?? 'standard' }; },
+	async mount(ctx, id) { presetLog.mounted.push({ ctx, id }); return { id }; },
+};
+const makeFakeAgent = (log, sessionId, cwd, meta) => ({
   session: {
     id: sessionId,
-    header: { cwd },
+    header: { cwd, ...(meta?.agentPreset === undefined ? {} : { agentPreset: meta.agentPreset }) },
     get seq() { return fakeSeq; },
   },
-  followup(message) { agentLog.followups.push({ sessionId, message }); },
+  followup(message) { log.followups.push({ sessionId, message }); },
   whenIdle() { return Promise.resolve(); },
 });
-const orchCtx = {
-  get(name) {
-    if (name === 'agents') {
-      return {
-        get: (id) => agentLog.created.find((entry) => entry.sessionId === id)?.agent,
-        async create(options) {
-          agentLog.created.push({ ...options, agent: makeFakeAgent(options.sessionId, options.meta?.cwd) });
-          return { agent: agentLog.created.at(-1).agent };
-        },
-        async resume(options) {
-          agentLog.resumed.push(options);
-          const agent = makeFakeAgent(options.resumeSessionId, orchWorkspace);
-          agentLog.resumed.at(-1).agent = agent;
-          return { agent };
-        },
-      };
-    }
-    if (name === 'agentDefaultModel') {
-      return { currentSelection: () => ({ provider: 'deepseek', model: 'test-model' }) };
-    }
-    if (name === 'workspaceRegistry') {
-      return { list: () => [{ path: orchWorkspace, attachSession: (id) => { agentLog.attached.push(id); return Promise.resolve(); } }] };
-    }
-    if (name === 'sessionProjections') {
-      return { stateOf: () => boardForWorker() };
-    }
-    return undefined;
+/** Fake `agents` service: create/resume run the caller's setup callback the
+ * way the real AgentLoop does (setupAndPublish, before the turn starts). */
+const makeAgentsSurface = (log, { liveCreated = true, resumedPreset } = {}) => ({
+  get: (id) => (liveCreated ? log.created.find((entry) => entry.sessionId === id)?.agent : undefined),
+  async create(options) {
+    const agent = makeFakeAgent(log, options.sessionId, options.meta?.cwd, options.meta);
+    log.created.push({ ...options, agent });
+    if (typeof options.setup === 'function') await options.setup({ setupOf: options.sessionId }, agent);
+    return { agent: log.created.at(-1).agent };
   },
+  async resume(options) {
+    const agent = makeFakeAgent(log, options.resumeSessionId, orchWorkspace,
+      resumedPreset === undefined ? undefined : { agentPreset: resumedPreset });
+    log.resumed.push({ ...options, agent });
+    if (typeof options.setup === 'function') await options.setup({ setupOf: options.resumeSessionId }, agent);
+    return { agent };
+  },
+});
+const orchServices = {
+  agents: makeAgentsSurface(agentLog),
+  agentDefaultModel: { currentSelection: () => ({ provider: 'deepseek', model: 'test-model' }) },
+  agentPresets: fakePresets,
+  workspaceRegistry: { list: () => [{ path: orchWorkspace, attachSession: (id) => { agentLog.attached.push(id); return Promise.resolve(); } }] },
+  sessionProjections: { stateOf: () => boardForWorker() },
 };
+const orchCtx = { get: (name) => orchServices[name] };
 const runtime = createQueueRuntime(orchCtx, defaults, orchStore);
 const workerItem = await runtime.enqueueAndPump({
   request: 'Build the retention pipeline',
@@ -746,6 +791,15 @@ await tick();
 eq('host: orchestrator: worker created with default model options and cwd',
   [agentLog.created[0]?.agentOptions, agentLog.created[0]?.meta?.cwd],
   [{ provider: 'deepseek', model: 'test-model' }, orchWorkspace]);
+eq('host: orchestrator: creation composes the default agent preset (the tool bundle)',
+  [agentLog.created[0]?.meta?.agentPreset, typeof agentLog.created[0]?.setup],
+  ['standard', 'function']);
+check('host: orchestrator: the default preset was resolved (no explicit id)',
+  presetLog.resolved.length >= 1 && presetLog.resolved.every((id) => id === undefined),
+  { resolved: presetLog.resolved });
+check('host: orchestrator: creation setup mounted the preset tree on the worker\'s agent context',
+  presetLog.mounted[0]?.id === 'standard' && presetLog.mounted[0]?.ctx?.setupOf === agentLog.created[0]?.sessionId,
+  { mounted: presetLog.mounted.map(({ id, ctx }) => ({ id, ctx })) });
 eq('host: orchestrator: worker attached to its workspace', agentLog.attached.length, 1);
 const workerPrompt = agentLog.followups[0]?.message?.content?.[0]?.text ?? '';
 check('host: orchestrator: steered prompt is the autonomous worker prompt',
@@ -777,6 +831,49 @@ check('host: orchestrator: resumed worker gets the retry notice and stays autono
   && retriedPrompt.includes('RESUMED after a failed attempt'));
 const retriedItem = await orchStore.find(workerItem.id);
 eq('host: orchestrator: completing worker settles succeeded', retriedItem?.status, 'succeeded');
+
+// The RESUME path (the worker's live agent is gone — restart or disposal):
+// the resume call carries a setup that re-mounts the preset the session
+// header RECORDED at creation, exactly like the controller's resume path.
+const orchHome2 = mkdtempSync(join(tmpdir(), 'factory-orch-resume-'));
+const orchStore2 = host.createQueueStore({ dir: orchHome2 });
+const resumeLog = { created: [], resumed: [], attached: [], followups: [] };
+const resumeServices = {
+  agents: makeAgentsSurface(resumeLog, { liveCreated: false, resumedPreset: 'recorded-preset' }),
+  agentDefaultModel: { currentSelection: () => ({ provider: 'deepseek', model: 'test-model' }) },
+  agentPresets: fakePresets,
+  workspaceRegistry: { list: () => [] },
+  sessionProjections: { stateOf: () => boardForWorker() },
+};
+const resumeRuntime = createQueueRuntime({ get: (name) => resumeServices[name] }, defaults, orchStore2);
+fakeSeq = 0;
+boardForWorker = () => undefined;
+const resumeItem = await resumeRuntime.enqueueAndPump({
+  request: 'Resume me', summary: 'Resume', workspace: orchWorkspace, scopes: [],
+});
+await tick();
+await tick();
+const resumeWorker = await orchStore2.find(resumeItem.id);
+eq('host: orchestrator: dead worker fails (ready for a resuming retry)', resumeWorker?.status, 'failed');
+const mountedBefore = presetLog.mounted.length;
+fakeSeq = 42;
+boardForWorker = () => ({
+  running: false,
+  runCount: 0,
+  plan: null,
+  lastLine: '[factory] phase 9/9 evaluate: done',
+  phases: Array.from({ length: 9 }, (_, index) => ({ n: index + 1, key: `p${index}`, status: 'done', text: null })),
+});
+await resumeRuntime.retry(resumeItem.id);
+await tick();
+await tick();
+check('host: orchestrator: resume mounts the header-recorded preset on the resumed agent context',
+  typeof resumeLog.resumed[0]?.setup === 'function'
+  && presetLog.mounted[mountedBefore]?.id === 'recorded-preset'
+  && presetLog.mounted[mountedBefore]?.ctx?.setupOf === resumeWorker?.workerSessionId,
+  { resumedSetups: resumeLog.resumed.map((entry) => typeof entry.setup), mounted: presetLog.mounted.map(({ id, ctx }) => ({ id, ctx })) });
+eq('host: orchestrator: resumed worker settles succeeded',
+  (await orchStore2.find(resumeItem.id))?.status, 'succeeded');
 
 // Route POST actions: drive a REAL failure through the apply()-wired
 // runtime (a second store instance's writes are invisible to its cached
@@ -815,24 +912,7 @@ hostServices.sessionProjections = {
     : undefined),
 };
 fireSessionEvent(assistantEvent(9, '[factory] enqueue: {"request":"Route retry target","summary":"Route retry","scopes":["route/"],"clarifications":[]}'));
-// Poll until the dead worker settles (the pump's serialized writes make
-// fixed ticks racy).
-let routeItemSnap = null;
-for (let attempt = 0; attempt < 100 && routeItemSnap === null; attempt += 1) {
-	await tick();
-	try {
-		// A fresh store per read: a cached instance would never see the
-		// runtime's writes.
-		const snap = await host.createQueueStore({ dir: join(queueHome, 'factory-queue') }).snapshot();
-		routeItemSnap = snap.items.find((item) => item.summary === 'Route retry' && item.status !== 'queued') ?? null;
-	} catch {
-		// A torn read while the runtime atomically replaces the file: retry.
-	}
-}
-const routeBefore = host.createQueueStore({ dir: join(queueHome, 'factory-queue') });
-check('host: route fixture: the earlier queued item completed and the dead worker failed',
-	routeItemSnap?.status === 'failed' && routeItemSnap?.failureReason?.includes('turn never started'),
-	{ routeItemSnap });const makeRes = () => ({
+const makeRes = () => ({
   status: 0,
   body: '',
   writeHead(status) { this.status = status; return this; },
@@ -854,17 +934,27 @@ const makeReq = (method, headers, body) => {
   }
   return req;
 };
-/** Read a queue snapshot tolerating torn Windows rename reads. */
-async function safeSnapshot(store, attempts = 20) {
-	for (let attempt = 0; ; attempt += 1) {
-		try {
-			return await store.snapshot();
-		} catch (error) {
-			if (attempt >= attempts) throw error;
-			await tick();
-		}
-	}
+// All fixture reads go through the route's GET (the queue UI's read model,
+// served from the runtime's own store): minting extra store instances per
+// read would let their crash-recovery persist race the runtime's atomic
+// writes whenever an item is momentarily `running` on disk.
+async function routeSnapshot() {
+  const res = makeRes();
+  await routeHandler(makeReq('GET', {}), res);
+  return JSON.parse(res.body);
 }
+// Poll until the dead worker settles (the pump's serialized writes make
+// fixed ticks racy).
+	let routeItemSnap = null;
+for (let attempt = 0; attempt < 100 && routeItemSnap === null; attempt += 1) {
+	await tick();
+	const snap = await routeSnapshot();
+	routeItemSnap = snap.items.find((item) => item.summary === 'Route retry'
+		&& (item.status === 'failed' || item.status === 'succeeded')) ?? null;
+}
+check('host: route fixture: the earlier queued item completed and the dead worker failed',
+	routeItemSnap?.status === 'failed' && routeItemSnap?.failureReason?.includes('turn never started'),
+	{ routeItemSnap });
 const guardRes = makeRes();
 await routeHandler(makeReq('POST', {}), guardRes);
 eq('host: route: POST without the action header is forbidden', guardRes.status, 403);
@@ -872,8 +962,7 @@ const retryRes = makeRes();
 await routeHandler(makeReq('POST', { 'x-dsh-factory-action': 'queue' }, JSON.stringify({ action: 'retry', id: routeItemSnap?.id })), retryRes);
 await tick();
 await tick();
-const routeAfter = host.createQueueStore({ dir: join(queueHome, 'factory-queue') });
-const routeAfterSnap = await safeSnapshot(routeAfter);
+const routeAfterSnap = await routeSnapshot();
 eq('host: route: POST retry re-queues, the worker reruns, and the halt lifts', [
 	retryRes.status,
 	routeAfterSnap.items.find((item) => item.id === routeItemSnap?.id)?.status,
@@ -885,10 +974,9 @@ eq('host: route: unknown action rejected', badActionRes.status, 400);
 const removeRes = makeRes();
 await routeHandler(makeReq('POST', { 'x-dsh-factory-action': 'queue' }, JSON.stringify({ action: 'remove', id: routeItemSnap?.id })), removeRes);
 await tick();
-const routeAfterRemove = host.createQueueStore({ dir: join(queueHome, 'factory-queue') });
 eq('host: route: POST remove drops the item', [
 	removeRes.status,
-	(await routeAfterRemove.snapshot()).items.some((item) => item.id === routeItemSnap?.id),
+	(await routeSnapshot()).items.some((item) => item.id === routeItemSnap?.id),
 ], [200, false]);
 const retryUnknown = await commandDef.handler({ agent: fakeAgent, rawInput: 'queue retry q99', attachments: [], signal: undefined });
 eq('host: /factory queue retry of an unknown item is an error', retryUnknown.kind, 'error');

@@ -143,6 +143,8 @@ window.__ModuleLoader__.load({
 			'.dsf-queueAction:hover,.dsf-queueAction:focus-visible{background:var(--dsw-alias-fill-l1);color:var(--dsw-alias-label-primary)}',
 			'.dsf-queueActionRetry{color:var(--dsw-alias-state-error-primary)}',
 			'.dsf-queueActionRemove:hover,.dsf-queueActionRemove:focus-visible{color:var(--dsw-alias-state-error-primary)}',
+			'.dsf-queueBar{display:flex;align-items:center;justify-content:space-between;gap:8px}',
+			'.dsf-queueActionArmed{color:var(--dsw-alias-state-error-primary);border-color:var(--dsw-alias-state-error-primary)}',
 			'.dsf-last{margin-top:4px;padding:6px 8px;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-fill-l1);font-family:var(--dsw-font-mono);font-size:11px;color:var(--dsw-alias-label-secondary);word-break:break-word}',
 			'.dsf-lastLabel{display:block;margin-bottom:2px;font-size:10px;color:var(--dsw-alias-label-tertiary)}',
 			'.dsf-titleIcon{flex:none}',
@@ -186,6 +188,9 @@ window.__ModuleLoader__.load({
 			'queue.openAria': '打开该队列项的工作器会话',
 			'queue.retryAria': '恢复该失败项的工作器会话并重试',
 			'queue.removeAria': '从队列中移除该项（运行中的工作器会被取消）',
+			'queue.clean': '清理',
+			'queue.cleanConfirm': '确认',
+			'queue.cleanAria': '移除所有已完成的队列项（仅移除队列行；工作器会话保留）',
 			'status.pending': '待执行',
 			'status.active': '进行中',
 			'status.done': '已完成',
@@ -222,6 +227,9 @@ window.__ModuleLoader__.load({
 			'queue.openAria': 'Open this queue item\'s worker session',
 			'queue.retryAria': 'Resume this failed item\'s worker session and retry',
 			'queue.removeAria': 'Remove this item from the queue (a running worker is cancelled)',
+			'queue.clean': 'Clean',
+			'queue.cleanConfirm': 'Confirm',
+			'queue.cleanAria': 'Remove every succeeded queue item (queue rows only; worker sessions are kept)',
 			'status.pending': 'pending',
 			'status.active': 'active',
 			'status.done': 'done',
@@ -327,15 +335,39 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
-		 * The queue page (pure renderer): the global factory queue read model —
+		 * The queue page (renderer): the global factory queue read model —
 		 * one row per item (id, status, summary, scopes, failure reason) with
 		 * an Open button jumping to the worker session and a Retry button on
-		 * failed rows (resumes that worker), the halt banner with its ack hint
-		 * when a failure froze the queue, and a back control returning to the
-		 * phase list.
+		 * failed rows (resumes that worker), a Clean control sweeping the
+		 * SUCCEEDED rows (rows only — worker sessions stay; it reuses the
+		 * per-item remove action once per succeeded item, behind an inline
+		 * two-step confirm: first click arms the button to "Confirm", second
+		 * click executes and the button auto-resets — no browser dialog),
+		 * the halt banner with its ack hint when a failure froze the queue,
+		 * and a back control returning to the phase list.
 		 */
 		function FactoryQueuePage({ queue, error, t, onBack, refresh }) {
 			const items = Array.isArray(queue?.items) ? queue.items : [];
+			const [cleanArmed, setCleanArmed] = useState(false);
+			const succeeded = items.filter((item) => item.status === 'succeeded');
+			const armed = cleanArmed && succeeded.length > 0;
+			/** Two-step Clean: arm → Confirm executes the succeeded-only sweep. */
+			const onClean = () => {
+				if (!armed) {
+					setCleanArmed(true);
+					return;
+				}
+				setCleanArmed(false);
+				void (async () => {
+					// Remove EXACTLY the rows that are succeeded in the
+					// confirmed snapshot, reusing the per-item remove action
+					// (sequential: the Host store serializes its writes).
+					for (const item of items) {
+						if (item.status !== 'succeeded') continue;
+						await postQueueAction({ action: 'remove', id: item.id });
+					}
+				})().then(refresh);
+			};
 			return h('div', { className: 'dsf-root' },
 				h('button', {
 					type: 'button',
@@ -343,7 +375,17 @@ window.__ModuleLoader__.load({
 					onClick: onBack,
 					'aria-label': t('queue.back'),
 				}, t('queue.back')),
-				h('div', { className: 'dsf-planTitle' }, t('queue.title')),
+				h('div', { className: 'dsf-queueBar' },
+					h('div', { className: 'dsf-planTitle' }, t('queue.title')),
+					succeeded.length > 0
+						? h('button', {
+							type: 'button',
+							className: `dsf-queueAction dsf-queueActionClean${armed ? ' dsf-queueActionArmed' : ''}`,
+							onClick: onClean,
+							title: t('queue.cleanAria'),
+							'aria-label': t('queue.cleanAria'),
+						}, armed ? t('queue.cleanConfirm') : t('queue.clean'))
+						: null),
 				queue?.halted === true
 					? h('div', { className: 'dsf-queueHalted' },
 						h('div', { className: 'dsf-queueHaltedTitle' }, t('queue.halted')),
