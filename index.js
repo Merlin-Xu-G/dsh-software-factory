@@ -63,6 +63,7 @@ import { buildFactoryProjectionDefinition } from './lib/projection.js';
 import { defineFactoryCommand } from './lib/command.js';
 import { createQueueStore } from './lib/queue.js';
 import { createQueueRuntime } from './lib/orchestrator.js';
+import { resolveEnqueueSelection, captureSessionPreset } from './lib/selection.js';
 
 export { Config, resolveConfig };
 export { parseFactoryYml, applyProjectOverrides } from './lib/project-file.js';
@@ -130,6 +131,16 @@ export function apply(ctx, config) {
     const sourceEvent = `${session.id}:${event.seq}`;
     void store.hasSourceEvent(sourceEvent).then(async (seen) => {
       if (seen) return;
+      // Snapshot the start session's effective model selection (pending
+      // model/selection event, else its last request header with
+      // adapter-defaulted effort skipped, else the global default — the
+      // session controller's own read order), refined by any provider/
+      // model/reasoningEffort fields the enqueue JSON names.
+      const selection = await resolveEnqueueSelection(ctx, session, payload);
+      // The start session's MODE — its current agent preset (Standard,
+      // Creator, …) — snapshotted the same way, so the worker composes
+      // with that preset's tool tree instead of always the default's.
+      const agentPreset = captureSessionPreset(ctx, session);
       await runtime.enqueueAndPump({
         request: typeof payload.request === 'string' && payload.request !== ''
           ? payload.request
@@ -142,6 +153,8 @@ export function apply(ctx, config) {
         clarifications: Array.isArray(payload.clarifications)
           ? payload.clarifications
           : [],
+        ...(selection === null ? {} : { selection }),
+        ...(agentPreset === null ? {} : { agentPreset }),
         sourceEvent,
       });
     }).catch((error) => {
@@ -168,10 +181,22 @@ export function apply(ctx, config) {
         try {
           if (req.method === 'GET' || req.method === 'HEAD') {
             const queue = await store.snapshot();
+            const countBy = (status) => queue.items
+              .filter((item) => item.status === status).length;
             return send(200, {
               halted: queue.halted,
               haltedBy: queue.haltedBy,
               concurrency: resolved.queueConcurrency,
+              // Read-model stats for the queue panel's status strip: counts
+              // per status plus running-vs-cap (the panel renders
+              // "<running>/<cap> running · <queued> queued · <failed> failed").
+              stats: {
+                queued: countBy('queued'),
+                running: countBy('running'),
+                succeeded: countBy('succeeded'),
+                failed: countBy('failed'),
+                runningVsCap: `${countBy('running')}/${resolved.queueConcurrency}`,
+              },
               items: queue.items.map((item) => ({
                 id: item.id,
                 summary: item.summary,
@@ -183,6 +208,9 @@ export function apply(ctx, config) {
                 startedAt: item.startedAt,
                 endedAt: item.endedAt,
                 failureReason: item.failureReason,
+                selection: item.selection,
+                agentPreset: item.agentPreset,
+                modelNote: item.modelNote,
               })),
             });
           }

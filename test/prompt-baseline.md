@@ -5,9 +5,10 @@ You are running the software-factory pipeline. Work through the nine phases belo
 
 Ground rules:
 
-- Emit one compact status line when you ENTER each phase (with your intent) and one when you LEAVE it (with the outcome), in exactly this form: `[factory] phase <n>/9 <key>: <short status>` — for example `[factory] phase 3/9 implement: 3 tasks done`.
+- Emit one compact status line when you ENTER each phase (with your intent) and one when you LEAVE it (with the outcome), in exactly this form: `[factory] phase <n>/9 <key>: <short status>` — an enter line states the intent (`[factory] phase 3/9 implement: implementing tasks 1-3`).
+- A LEAVE line's status MUST begin with a verdict word — `pass`, `fail`, or `skip` — optionally followed by a dash and free prose: `[factory] phase 6/9 test: pass — 42 checks green`, `[factory] phase 5/9 guardrails: fail — lint exit 1`. The verdict word alone drives the progress board's icon, so a passing line's status must never contain the words fail, error, or blocked — put honest detail after the dash on fail and skip lines instead.
 - Never skip an enabled phase. If a phase fails, fix and retry within that phase; if it truly cannot pass, stop and report the failure honestly instead of moving on silently.
-- A disabled phase is still announced: `[factory] phase <n>/9 <key>: skipped (disabled by configuration)`.
+- A disabled phase is still announced: `[factory] phase <n>/9 <key>: skip (disabled by configuration)`.
 - Report command results honestly: a non-zero exit code is a failure, whatever the output looks like. Quote exit codes.
 - Do not restate this directive; execute it. Keep prose between status lines short and factual.
 
@@ -73,7 +74,7 @@ Ground rules:
 - Summarize the verification evidence: every command run with its exit status, suites that passed, and what was verified manually.
 - State limitations honestly: what was not tested, known risks, and any deferred work.
 - Present the deliverables (changed files and produced artifacts) as a clear list.
-- Finish with the final status line: `[factory] phase 9/9 evaluate: <verdict>`.
+- Finish with the final status line: `[factory] phase 9/9 evaluate: pass — <verdict>` (or `fail — <verdict>`; the leading verdict word is required).
 
 ---
 
@@ -88,9 +89,10 @@ You are running the software-factory pipeline. Work through the nine phases belo
 
 Ground rules:
 
-- Emit one compact status line when you ENTER each phase (with your intent) and one when you LEAVE it (with the outcome), in exactly this form: `[factory] phase <n>/9 <key>: <short status>` — for example `[factory] phase 3/9 implement: 3 tasks done`.
+- Emit one compact status line when you ENTER each phase (with your intent) and one when you LEAVE it (with the outcome), in exactly this form: `[factory] phase <n>/9 <key>: <short status>` — an enter line states the intent (`[factory] phase 3/9 implement: implementing tasks 1-3`).
+- A LEAVE line's status MUST begin with a verdict word — `pass`, `fail`, or `skip` — optionally followed by a dash and free prose: `[factory] phase 6/9 test: pass — 42 checks green`, `[factory] phase 5/9 guardrails: fail — lint exit 1`. The verdict word alone drives the progress board's icon, so a passing line's status must never contain the words fail, error, or blocked — put honest detail after the dash on fail and skip lines instead.
 - Never skip an enabled phase. If a phase fails, fix and retry within that phase; if it truly cannot pass, stop and report the failure honestly instead of moving on silently.
-- A disabled phase is still announced: `[factory] phase <n>/9 <key>: skipped (disabled by configuration)`.
+- A disabled phase is still announced: `[factory] phase <n>/9 <key>: skip (disabled by configuration)`.
 - Report command results honestly: a non-zero exit code is a failure, whatever the output looks like. Quote exit codes.
 - Do not restate this directive; execute it. Keep prose between status lines short and factual.
 
@@ -162,7 +164,7 @@ Ground rules:
 - Summarize the verification evidence: every command run with its exit status, suites that passed, and what was verified manually.
 - State limitations honestly: what was not tested, known risks, and any deferred work.
 - Present the deliverables (changed files and produced artifacts) as a clear list.
-- Finish with the final status line: `[factory] phase 9/9 evaluate: <verdict>`.
+- Finish with the final status line: `[factory] phase 9/9 evaluate: pass — <verdict>` (or `fail — <verdict>`; the leading verdict word is required).
 
 ---
 
@@ -177,9 +179,10 @@ You are running the software-factory pipeline. Work through the nine phases belo
 
 Ground rules:
 
-- Emit one compact status line when you ENTER each phase (with your intent) and one when you LEAVE it (with the outcome), in exactly this form: `[factory] phase <n>/9 <key>: <short status>` — for example `[factory] phase 3/9 implement: 3 tasks done`.
+- Emit one compact status line when you ENTER each phase (with your intent) and one when you LEAVE it (with the outcome), in exactly this form: `[factory] phase <n>/9 <key>: <short status>` — an enter line states the intent (`[factory] phase 3/9 implement: implementing tasks 1-3`).
+- A LEAVE line's status MUST begin with a verdict word — `pass`, `fail`, or `skip` — optionally followed by a dash and free prose: `[factory] phase 6/9 test: pass — 42 checks green`, `[factory] phase 5/9 guardrails: fail — lint exit 1`. The verdict word alone drives the progress board's icon, so a passing line's status must never contain the words fail, error, or blocked — put honest detail after the dash on fail and skip lines instead.
 - Never skip an enabled phase. If a phase fails, fix and retry within that phase; if it truly cannot pass, stop and report the failure honestly instead of moving on silently.
-- A disabled phase is still announced: `[factory] phase <n>/9 <key>: skipped (disabled by configuration)`.
+- A disabled phase is still announced: `[factory] phase <n>/9 <key>: skip (disabled by configuration)`.
 - Report command results honestly: a non-zero exit code is a failure, whatever the output looks like. Quote exit codes.
 - Do not restate this directive; execute it. Keep prose between status lines short and factual.
 
@@ -238,7 +241,7 @@ Ground rules:
 - Summarize the verification evidence: every command run with its exit status, suites that passed, and what was verified manually.
 - State limitations honestly: what was not tested, known risks, and any deferred work.
 - Present the deliverables (changed files and produced artifacts) as a clear list.
-- Finish with the final status line: `[factory] phase 9/9 evaluate: <verdict>`.
+- Finish with the final status line: `[factory] phase 9/9 evaluate: pass — <verdict>` (or `fail — <verdict>`; the leading verdict word is required).
 
 ---
 
@@ -253,9 +256,10 @@ You are running the software-factory pipeline. Work through the nine phases belo
 
 Ground rules:
 
-- Emit one compact status line when you ENTER each phase (with your intent) and one when you LEAVE it (with the outcome), in exactly this form: `[factory] phase <n>/9 <key>: <short status>` — for example `[factory] phase 3/9 implement: 3 tasks done`.
+- Emit one compact status line when you ENTER each phase (with your intent) and one when you LEAVE it (with the outcome), in exactly this form: `[factory] phase <n>/9 <key>: <short status>` — an enter line states the intent (`[factory] phase 3/9 implement: implementing tasks 1-3`).
+- A LEAVE line's status MUST begin with a verdict word — `pass`, `fail`, or `skip` — optionally followed by a dash and free prose: `[factory] phase 6/9 test: pass — 42 checks green`, `[factory] phase 5/9 guardrails: fail — lint exit 1`. The verdict word alone drives the progress board's icon, so a passing line's status must never contain the words fail, error, or blocked — put honest detail after the dash on fail and skip lines instead.
 - Never skip an enabled phase. If a phase fails, fix and retry within that phase; if it truly cannot pass, stop and report the failure honestly instead of moving on silently.
-- A disabled phase is still announced: `[factory] phase <n>/9 <key>: skipped (disabled by configuration)`.
+- A disabled phase is still announced: `[factory] phase <n>/9 <key>: skip (disabled by configuration)`.
 - Report command results honestly: a non-zero exit code is a failure, whatever the output looks like. Quote exit codes.
 - Do not restate this directive; execute it. Keep prose between status lines short and factual.
 
@@ -336,7 +340,7 @@ curl /healthz afterwards.
 - Summarize the verification evidence: every command run with its exit status, suites that passed, and what was verified manually.
 - State limitations honestly: what was not tested, known risks, and any deferred work.
 - Present the deliverables (changed files and produced artifacts) as a clear list.
-- Finish with the final status line: `[factory] phase 9/9 evaluate: <verdict>`.
+- Finish with the final status line: `[factory] phase 9/9 evaluate: pass — <verdict>` (or `fail — <verdict>`; the leading verdict word is required).
 
 Project instructions for this phase (appended verbatim from .factory.yml):
 
@@ -355,9 +359,10 @@ You are running the software-factory pipeline. Work through the nine phases belo
 
 Ground rules:
 
-- Emit one compact status line when you ENTER each phase (with your intent) and one when you LEAVE it (with the outcome), in exactly this form: `[factory] phase <n>/9 <key>: <short status>` — for example `[factory] phase 3/9 implement: 3 tasks done`.
+- Emit one compact status line when you ENTER each phase (with your intent) and one when you LEAVE it (with the outcome), in exactly this form: `[factory] phase <n>/9 <key>: <short status>` — an enter line states the intent (`[factory] phase 3/9 implement: implementing tasks 1-3`).
+- A LEAVE line's status MUST begin with a verdict word — `pass`, `fail`, or `skip` — optionally followed by a dash and free prose: `[factory] phase 6/9 test: pass — 42 checks green`, `[factory] phase 5/9 guardrails: fail — lint exit 1`. The verdict word alone drives the progress board's icon, so a passing line's status must never contain the words fail, error, or blocked — put honest detail after the dash on fail and skip lines instead.
 - Never skip an enabled phase. If a phase fails, fix and retry within that phase; if it truly cannot pass, stop and report the failure honestly instead of moving on silently.
-- A disabled phase is still announced: `[factory] phase <n>/9 <key>: skipped (disabled by configuration)`.
+- A disabled phase is still announced: `[factory] phase <n>/9 <key>: skip (disabled by configuration)`.
 - Report command results honestly: a non-zero exit code is a failure, whatever the output looks like. Quote exit codes.
 - Do not restate this directive; execute it. Keep prose between status lines short and factual.
 
@@ -412,7 +417,7 @@ Ground rules:
 - Summarize the verification evidence: every command run with its exit status, suites that passed, and what was verified manually.
 - State limitations honestly: what was not tested, known risks, and any deferred work.
 - Present the deliverables (changed files and produced artifacts) as a clear list.
-- Finish with the final status line: `[factory] phase 9/9 evaluate: <verdict>`.
+- Finish with the final status line: `[factory] phase 9/9 evaluate: pass — <verdict>` (or `fail — <verdict>`; the leading verdict word is required).
 
 ---
 
@@ -429,9 +434,10 @@ You are running the software-factory pipeline. Work through the nine phases belo
 
 Ground rules:
 
-- Emit one compact status line when you ENTER each phase (with your intent) and one when you LEAVE it (with the outcome), in exactly this form: `[factory] phase <n>/9 <key>: <short status>` — for example `[factory] phase 3/9 implement: 3 tasks done`.
+- Emit one compact status line when you ENTER each phase (with your intent) and one when you LEAVE it (with the outcome), in exactly this form: `[factory] phase <n>/9 <key>: <short status>` — an enter line states the intent (`[factory] phase 3/9 implement: implementing tasks 1-3`).
+- A LEAVE line's status MUST begin with a verdict word — `pass`, `fail`, or `skip` — optionally followed by a dash and free prose: `[factory] phase 6/9 test: pass — 42 checks green`, `[factory] phase 5/9 guardrails: fail — lint exit 1`. The verdict word alone drives the progress board's icon, so a passing line's status must never contain the words fail, error, or blocked — put honest detail after the dash on fail and skip lines instead.
 - Never skip an enabled phase. If a phase fails, fix and retry within that phase; if it truly cannot pass, stop and report the failure honestly instead of moving on silently.
-- A disabled phase is still announced: `[factory] phase <n>/9 <key>: skipped (disabled by configuration)`.
+- A disabled phase is still announced: `[factory] phase <n>/9 <key>: skip (disabled by configuration)`.
 - Report command results honestly: a non-zero exit code is a failure, whatever the output looks like. Quote exit codes.
 - Do not restate this directive; execute it. Keep prose between status lines short and factual.
 
@@ -495,7 +501,7 @@ The user answered these before the run started. Treat every answer as part of th
 - Summarize the verification evidence: every command run with its exit status, suites that passed, and what was verified manually.
 - State limitations honestly: what was not tested, known risks, and any deferred work.
 - Present the deliverables (changed files and produced artifacts) as a clear list.
-- Finish with the final status line: `[factory] phase 9/9 evaluate: <verdict>`.
+- Finish with the final status line: `[factory] phase 9/9 evaluate: pass — <verdict>` (or `fail — <verdict>`; the leading verdict word is required).
 
 ---
 

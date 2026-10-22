@@ -15,8 +15,13 @@ a short success text. The agent runs the pipeline and narrates progress with
 compact per-phase status lines such as:
 
 ```
-[factory] phase 3/9 implement: 3 tasks done
+[factory] phase 3/9 implement: implementing tasks 1-3
+[factory] phase 6/9 test: pass — 42 checks green
 ```
+
+A phase-LEAVE line's status must begin with a verdict word — `pass`, `fail`,
+or `skip` — optionally followed by a dash and free prose; that first word
+alone drives the tab's per-phase icon (see "Web client" below).
 
 ## Compatibility
 
@@ -197,7 +202,10 @@ with an empty state while no run is active.
   `command/run` into a monotonic `runCount` on the same wire view, and
   captures the run's todo list as `plan` while the run is active (the whole
   list phase 2 records; the shipped `todos` projection is cleared on every
-  turn, so it cannot serve a durable view). The wire view reaches the
+  turn, so it cannot serve a durable view). A phase's icon comes ONLY from
+  the LEAVE line's leading verdict word (`pass`/`fail`/`skip`, the v6
+  contract) — an earlier substring scan misread honest prose like "no check
+  now fails" as a failure. The wire view reaches the
   client through the shipped session binding
   (`sessions.binding(id).session.projections.faceOf('factory')`) — the same
   host→client shape the shipped plan-mode and goal plugins use. Because it
@@ -217,6 +225,15 @@ with an empty state while no run is active.
   receives the framework's `useTabInfo` hook. A session without the
   projection reads as an `undefined` snapshot and renders the
   "progress unavailable" state.
+- **Queue panel registration**: the global queue page registers as a
+  root-scoped `main` keyed-slot entry (`ctx.slots.register({ name: 'main',
+  key, locale, inject }, Page)`) addressed by the SAME id as its
+  `sidebar.panellist` rail entry (`{ id, order, label }`) — the public
+  two-stage path the shipped plugins/task panels use. The rail icon is the
+  factory glyph at the rail's own `{ size, active }` props; the entry's
+  `locale` namespace supplies the page's `t` prop. Nothing ever auto-opens
+  the panel — the Factory tab's auto-open on a run start is unchanged and
+  independent.
 - **Auto-open**: running `/factory` opens the tab by itself. The client
   watches the on-screen session's `factory` face (via
   `ctx.sidebarRight.mounted`, the shipped on-screen-session observable) and
@@ -231,8 +248,9 @@ with an empty state while no run is active.
   to a detail page listing the run's whole plan — every todo with its live
   status — followed by a back control returning to the phase list. A run
   without a recorded plan shows an explicit empty state on that page.
-- **Queue subpage**: a Queue button (present in every body state) opens the
-  global factory queue — see the next section.
+- **Queue panel**: the global factory queue lives in its own left-sidebar
+  panel — an icon in the sidebar rail (the first plugin-contributed entry)
+  opening a central page. See the next section.
 - **Styling**: theme tokens only (`--dsw-alias-*`, `--dsw-radius-*`,
   `--dsw-font-mono`); React from the browser module table; no Harness
   client package is imported.
@@ -257,13 +275,36 @@ session, executed by **worker sessions** the plugin itself starts:
   `[factory] enqueue: {json}` line; the plugin's host listener turns it into
   a queue item (idempotent per session event, so replays never duplicate).
 - **Workers are root sessions**: each item runs in its own agent session in
-  the item's workspace — created with the default model selection (a worker
-  without a model never runs), attached to that workspace so the sidebar
+  the item's workspace — created with the item's model selection (see the
+  next bullet; a worker without a model never runs), attached to that
+  workspace so the sidebar
   groups it, titled by its leading `Factory queue <id>: <summary>` prompt
   line, with its own live Factory tab — steered with the autonomous pipeline
   prompt (the clarification answers are binding; the worker never asks). The
   worker workspace's own `.factory.yml` applies; an invalid one fails the
   item loudly.
+- **Workers inherit the start session's model and mode**: at enqueue time
+  the host listener snapshots the enqueuing session's effective selection —
+  a pending `model/selection` event first, else the session's last request
+  header (an adapter-defaulted reasoning effort is skipped), else the
+  global default selection — and its current **mode** (agent preset:
+  Standard, Creator, …, from the `agentPreset` session projection), and
+  stores both on the queue item. Worker `agentOptions` carry that
+  snapshot's provider, model, AND reasoning effort on both create and
+  resume, and the worker composes under the captured preset's tool tree
+  instead of always the default's, so retries and crash recovery run under
+  the same selection and mode. Items written before the snapshots existed
+  run on the full global default selection (effort included) and the
+  default preset. The enqueue JSON line may optionally name `provider`,
+  `model`, and/or `reasoningEffort` — per-field overrides of the captured
+  selection (naming only the effort keeps the session's model); invalid or
+  unresolvable fields are dropped leniently. If the captured model or
+  preset is no longer available when the worker starts (provider removed,
+  credential dropped, preset uninstalled), the worker falls back to the
+  global default selection and/or default preset and the item records a
+  fallback note — shown on the queue page — instead of failing. The queue
+  page shows a compact `mode · provider/model · effort` chip per item; the
+  `/factory queue` list output stays unchanged.
 - **Scheduling**: FIFO with the `queueConcurrency` cap (default 3) and
   write-scope blocking — an item does not start while a running item's
   scopes overlap it in the same workspace (whole-workspace scopes conflict
@@ -278,11 +319,15 @@ session, executed by **worker sessions** the plugin itself starts:
   `$DSH_HOME/factory-queue/queue.json`, written atomically on every change;
   after a restart, items left running are re-queued (their orphaned worker
   sessions stay in the sidebar) and scheduling resumes.
-- **Queue UI**: the Factory tab's Queue page (from any body state) polls the
-  plugin's same-origin route
-  `/plugins/@local/dsh-software-factory/queue.json` and lists every item —
+- **Queue UI**: a global left-sidebar panel (an icon in the sidebar rail —
+  the factory glyph, always present — opening a central page; it is never
+  auto-opened) polls the plugin's same-origin route
+  `/plugins/@local/dsh-software-factory/queue.json` every 2s ONLY while the
+  panel is open (no badge, no background traffic) and lists every item —
   status, scopes, failure reason, an Open button jumping to the worker
-  session, and a Retry button on failed rows. GET is the read model; the
+  session, and a Retry button on failed rows — under a one-line stats strip
+  (`2/3 running · 5 queued · 1 failed`) computed from the route's `stats`
+  fields (per-status counts plus running-vs-cap). GET is the read model; the
   ack/retry actions POST with a custom `x-dsh-factory-action` header (a
   non-simple header forces a CORS preflight this host never answers, so
   other origins cannot forge a POST). Worker verdicts come from each
@@ -366,8 +411,9 @@ lib/project-file.js `.factory.yml` parser + workspace-root reader + override mer
 lib/prompt.js       pipeline prompt builder (grill / autonomous / default modes)
 lib/command.js      dsh-commands definition + steered message + enqueue directive
 lib/queue.js        global durable queue store (scope blocking, cap, halt/ack)
+lib/selection.js    worker model-selection capture, JSON overrides, availability
 lib/orchestrator.js queue runtime: worker sessions + verdicts + status text
-client.js           Web half: right-sidebar Factory tab over the projection wire view
+client.js           Web half: right-sidebar Factory tab + left-sidebar queue panel
 locale/en.json      display metadata (English)
 locale/zh.json      display metadata (Chinese)
 icon.svg            plugin icon

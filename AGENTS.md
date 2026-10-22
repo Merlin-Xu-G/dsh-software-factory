@@ -19,9 +19,13 @@ tab that observes pipeline progress.
   parser/reader/merge), `prompt.js` (pipeline prompt, grill/autonomous
   modes), `command.js` (dsh-commands definition + steered message +
   enqueue directive), `queue.js` (global durable queue store),
-  `orchestrator.js` (queue runtime: worker sessions + verdicts).
+  `orchestrator.js` (queue runtime: worker sessions + verdicts),
+  `selection.js` (worker model-selection + agent-preset capture and
+  fallbacks).
 - `client.js` — Web half (ModuleLoader factory): the right-sidebar "Factory"
-  tab over the projection's wire view. Must stay one self-contained file —
+  tab over the projection's wire view, plus the global factory-queue panel
+  (a `sidebar.panellist` rail icon opening a `main`-slot central page that
+  polls queue.json while open). Must stay one self-contained file —
   a plugin bundle is a single module node whose imports may only be
   module-table leaves.
 - `locale/en.json`, `locale/zh.json` — Plugin Manager display metadata.

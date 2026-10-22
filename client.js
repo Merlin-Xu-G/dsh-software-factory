@@ -1,19 +1,27 @@
 /**
  * @local/dsh-software-factory — Client half (Web platform).
  *
- * Registers the "Factory" right-sidebar tab: a compact panel listing the
- * nine pipeline phases with live status, plus the latest narration line.
- * State comes from the Host's `factory` session projection, read through the
- * shipped session binding's projection store
- * (`ctx.sessions.binding(id).session.projections.faceOf('factory')`); no
- * plugin-owned transport.
+ * Registers two surfaces:
+ * - the "Factory" right-sidebar tab: a compact panel listing the nine
+ *   pipeline phases with live status plus the plan subpage. State comes from
+ *   the Host's `factory` session projection, read through the shipped session
+ *   binding's projection store
+ *   (`ctx.sessions.binding(id).session.projections.faceOf('factory')`); no
+ *   plugin-owned transport.
+ * - the global "Factory queue" left-sidebar panel: an icon in the
+ *   `sidebar.panellist` rail (the first plugin-contributed entry) opening a
+ *   central panel registered under the root-scoped `main` keyed slot. The
+ *   panel polls the Host's read-only queue.json route (2s) ONLY while it is
+ *   mounted, and renders item rows with Open/Retry/Remove action chips, a
+ *   Clean control, the halt banner, and a stats strip from the route's
+ *   `stats` fields. The rail icon carries no badge and never polls.
  *
  * One file on purpose: the client-modules contract makes a plugin bundle a
  * single module node whose imports may only be module-table leaves (`react`)
  * — relative-import chunks are compiler-generated machinery, not safe to
  * hand-author — so this bundle cannot be split like the Host half's `lib/`.
  * Internal order: constants, CSS, dictionaries, glyph + status markers,
- * title/body components, auto-open watcher, plugin body.
+ * title/body components, queue panel, auto-open watcher, plugin body.
  *
  * Contracts coded against (verified against the shipped client sources
  * extracted from the installed Harness: @deepseek-ai/dsh-client-ui-sidebar-right,
@@ -32,6 +40,12 @@
  *      the type id, installed through
  *      `ctx.slots.inject(seat, () => ctx.slots.register({ name, key, locale,
  *      inject }, Component))`.
+ * - A global left-sidebar panel registers in two stages (ui-sidebar /
+ *   ui-schedule's public path): the rail icon as a `sidebar.panellist` list
+ *   entry (`{ id, order, label }`; the icon component receives
+ *   `{ size, active }` owner props) and the central page as a root-scoped
+ *   `main` keyed-slot entry addressed by the SAME id. An entry's `locale`
+ *   namespace supplies its `t` prop (the renderer's standard kit).
  * - An occupant's own `inject(dispatchKey)` receives the scope binding key —
  *   the sessionId for a session-scoped seat — and its returned face's
  *   `hooks.<name>` values MUST be observable snapshot sources
@@ -59,7 +73,8 @@
  *   config `autoOpenTab`, default on; absent means enabled).
  *   Baselines are never treated as starts — connects, replays, and session
  *   switches open nothing — and a run in a session that is not on screen is
- *   ignored, because the tab shows the on-screen session's progress.
+ *   ignored, because the tab shows the on-screen session's progress. The
+ *   queue panel is NEVER auto-opened: it is opened manually from the rail.
  * - Styling: one injected `<style data-plugin-css>` tag, theme tokens only
  *   (`--dsw-alias-*`, `--dsw-radius-*`, `--dsw-font-mono`); React comes from
  *   the browser module table; no Harness client package is imported.
@@ -81,6 +96,13 @@ window.__ModuleLoader__.load({
 		const TAB_KIND = 'factory';
 		/** The Host projection key (must equal FACTORY_PROJECTION_KEY in index.js). */
 		const PROJECTION_KEY = 'factory';
+		/** The queue panel's identity: the `main` keyed-slot key AND the `sidebar.panellist` list id. */
+		const PANEL_ID = '@local/dsh-software-factory/queue-panel';
+		/**
+		 * Rail order: first plugin-contributed global panel icon (the shipped
+		 * plugins panel sits at 0, the task manager at 10).
+		 */
+		const PANEL_ORDER = -10;
 		/** Status values the Host projection emits. */
 		const STATUSES = ['pending', 'active', 'done', 'skipped', 'failed'];
 		/** Todo statuses (the captured plan) mapped onto the phase status dots. */
@@ -125,15 +147,14 @@ window.__ModuleLoader__.load({
 			'.dsf-planRow .dsf-dot{margin-top:3px}',
 			'.dsf-planRowActive{background:var(--dsw-alias-fill-l1)}',
 			'.dsf-planText{flex:1;min-width:0;color:var(--dsw-alias-label-secondary);white-space:pre-wrap;overflow-wrap:anywhere}',
-			'.dsf-nav{display:flex;justify-content:flex-end}',
-			'.dsf-navButton{background:0 0;border:0;padding:2px 6px;border-radius:var(--dsw-radius-sm);color:var(--dsw-alias-label-secondary);cursor:pointer;font-size:11px;line-height:16px}',
-			'.dsf-navButton:hover,.dsf-navButton:focus-visible{background:var(--dsw-alias-fill-l1);color:var(--dsw-alias-label-primary)}',
 			'.dsf-queueRow .dsf-dot{margin-top:3px}',
 			'.dsf-queueMain{flex:1;min-width:0}',
 			'.dsf-queueTitle{color:var(--dsw-alias-label-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
-			'.dsf-queueId{color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums;margin-right:6px}',
+			'.dsf-queueList{display:flex;flex-direction:column;gap:1px;list-style:none;margin:0;padding:0}',
 			'.dsf-queueStatus{color:var(--dsw-alias-label-tertiary);margin-right:6px}',
 			'.dsf-queueMeta{color:var(--dsw-alias-label-tertiary);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+			'.dsf-queueModel{color:var(--dsw-alias-label-secondary);font-size:11px;font-family:var(--dsw-font-mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+			'.dsf-queueModelNote{color:var(--dsw-alias-label-tertiary);font-size:11px;overflow-wrap:anywhere}',
 			'.dsf-queueFailure{color:var(--dsw-alias-state-error-primary);font-size:11px;overflow-wrap:anywhere}',
 			'.dsf-queueHalted{padding:6px 8px;border:.5px solid var(--dsw-alias-state-error-primary);border-radius:var(--dsw-radius-sm);color:var(--dsw-alias-state-error-primary)}',
 			'.dsf-queueHaltedTitle{font-size:12px}',
@@ -144,7 +165,9 @@ window.__ModuleLoader__.load({
 			'.dsf-queueActionRetry{color:var(--dsw-alias-state-error-primary)}',
 			'.dsf-queueActionRemove:hover,.dsf-queueActionRemove:focus-visible{color:var(--dsw-alias-state-error-primary)}',
 			'.dsf-queueBar{display:flex;align-items:center;justify-content:space-between;gap:8px}',
+			'.dsf-queueStrip{padding:0 2px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}',
 			'.dsf-queueActionArmed{color:var(--dsw-alias-state-error-primary);border-color:var(--dsw-alias-state-error-primary)}',
+			'.dsf-queueAction:disabled,.dsf-queueAction:disabled:hover,.dsf-queueAction:disabled:focus-visible{cursor:default;opacity:.5;background:0 0;border-color:var(--dsw-alias-border-l1);color:var(--dsw-alias-label-tertiary)}',
 			'.dsf-last{margin-top:4px;padding:6px 8px;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-fill-l1);font-family:var(--dsw-font-mono);font-size:11px;color:var(--dsw-alias-label-secondary);word-break:break-word}',
 			'.dsf-lastLabel{display:block;margin-bottom:2px;font-size:10px;color:var(--dsw-alias-label-tertiary)}',
 			'.dsf-titleIcon{flex:none}',
@@ -170,8 +193,7 @@ window.__ModuleLoader__.load({
 			'plan.back': '‹ 阶段列表',
 			'plan.empty': '本轮运行还没有记录计划（阶段 2 会用 todo 工具写入）。',
 			'plan.openAria': '查看本轮计划',
-			'queue.nav': '队列',
-			'queue.back': '‹ 阶段列表',
+			'panel.title': '工厂队列',
 			'queue.title': '工厂队列',
 			'queue.empty': '队列为空 —— 用 /factory -q <需求> 入队。',
 			'queue.halted': '队列已因失败暂停',
@@ -190,7 +212,8 @@ window.__ModuleLoader__.load({
 			'queue.removeAria': '从队列中移除该项（运行中的工作器会被取消）',
 			'queue.clean': '清理',
 			'queue.cleanConfirm': '确认',
-			'queue.cleanAria': '移除所有已完成的队列项（仅移除队列行；工作器会话保留）',
+			'queue.cleanAria': '移除所有已完成和失败的队列项（仅移除队列行，保留工作器会话；被移除失败项造成的暂停会随之解除）',
+			'queue.cleanDisabled': '没有可清理的项 —— 清理只作用于已完成和失败的队列行',
 			'status.pending': '待执行',
 			'status.active': '进行中',
 			'status.done': '已完成',
@@ -209,8 +232,7 @@ window.__ModuleLoader__.load({
 			'plan.back': '‹ Phases',
 			'plan.empty': 'No plan recorded for this run yet (phase 2 writes it with the todo tool).',
 			'plan.openAria': 'Show the plan for this run',
-			'queue.nav': 'Queue',
-			'queue.back': '‹ Phases',
+			'panel.title': 'Factory queue',
 			'queue.title': 'Factory queue',
 			'queue.empty': 'The queue is empty — enqueue with /factory -q <request>.',
 			'queue.halted': 'Queue halted by a failure',
@@ -229,7 +251,8 @@ window.__ModuleLoader__.load({
 			'queue.removeAria': 'Remove this item from the queue (a running worker is cancelled)',
 			'queue.clean': 'Clean',
 			'queue.cleanConfirm': 'Confirm',
-			'queue.cleanAria': 'Remove every succeeded queue item (queue rows only; worker sessions are kept)',
+			'queue.cleanAria': 'Remove every succeeded and failed queue item (queue rows only; worker sessions are kept; a halt caused by a removed failure lifts)',
+			'queue.cleanDisabled': 'Nothing to clean — the sweep only removes succeeded and failed rows',
 			'status.pending': 'pending',
 			'status.active': 'active',
 			'status.done': 'done',
@@ -318,10 +341,10 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
-		 * Post one queue action (ack/retry) to the Host route. The custom
-		 * `x-dsh-factory-action` header is the CSRF guard: cross-origin
+		 * Post one queue action (ack/retry/remove) to the Host route. The
+		 * custom `x-dsh-factory-action` header is the CSRF guard: cross-origin
 		 * requests cannot set it without a preflight this host never answers.
-		 * @param {{action: 'ack' | 'retry', id?: string}} body
+		 * @param {{action: 'ack' | 'retry' | 'remove', id?: string}} body
 		 * @returns {Promise<boolean>} whether the action succeeded.
 		 */
 		function postQueueAction(body) {
@@ -335,23 +358,39 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
-		 * The queue page (renderer): the global factory queue read model —
-		 * one row per item (id, status, summary, scopes, failure reason) with
-		 * an Open button jumping to the worker session and a Retry button on
-		 * failed rows (resumes that worker), a Clean control sweeping the
-		 * SUCCEEDED rows (rows only — worker sessions stay; it reuses the
-		 * per-item remove action once per succeeded item, behind an inline
-		 * two-step confirm: first click arms the button to "Confirm", second
-		 * click executes and the button auto-resets — no browser dialog),
-		 * the halt banner with its ack hint when a failure froze the queue,
-		 * and a back control returning to the phase list.
+		 * The queue panel page (renderer): the global factory queue read model —
+		 * one li row per item (status, summary, workspace/scopes, failure
+		 * reason) with an Open button jumping to the worker session and a
+		 * Retry button on failed rows (resumes that worker), a Clean control
+		 * sweeping the finished rows — succeeded AND failed, never
+		 * running/queued (rows only — worker sessions stay; it reuses the
+		 * per-item remove action once per swept item, so removing the
+		 * failure that caused a halt lifts that halt exactly like the
+		 * per-item Remove does), behind an inline two-step confirm: first
+		 * click arms the button to "Confirm", second click executes and the
+		 * button auto-resets — no browser dialog. The control is ALWAYS
+		 * visible in the panel bar; with nothing cleanable it renders
+		 * disabled behind an explanatory tooltip. Emptying the queue makes
+		 * the Host restart item numbering at q1 on the next enqueue. The
+		 * halt banner with its ack hint renders when a failure froze the
+		 * queue, and a one-line stats strip under the title computed from the
+		 * read model's `stats` fields ("2/3 running · 5 queued · 1 failed").
 		 */
-		function FactoryQueuePage({ queue, error, t, onBack, refresh }) {
+		function FactoryQueuePanel({ queue, error, t, refresh }) {
 			const items = Array.isArray(queue?.items) ? queue.items : [];
 			const [cleanArmed, setCleanArmed] = useState(false);
-			const succeeded = items.filter((item) => item.status === 'succeeded');
-			const armed = cleanArmed && succeeded.length > 0;
-			/** Two-step Clean: arm → Confirm executes the succeeded-only sweep. */
+			// The sweep covers FINISHED rows — succeeded AND failed, never
+			// running/queued: removing the failure that caused a halt lifts
+			// the halt, exactly like the per-item Remove already does.
+			const cleanable = items.filter((item) => item.status === 'succeeded' || item.status === 'failed');
+			const armed = cleanArmed && cleanable.length > 0;
+			// A stale arm auto-resets the moment nothing is cleanable any
+			// more (rows vanished under the 2s poll), so finished rows that
+			// appear later can never inherit an unearned Confirm.
+			useEffect(() => {
+				if (cleanable.length === 0) setCleanArmed(false);
+			}, [cleanable.length === 0]);
+			/** Two-step Clean: arm → Confirm executes the finished-rows sweep. */
 			const onClean = () => {
 				if (!armed) {
 					setCleanArmed(true);
@@ -359,33 +398,39 @@ window.__ModuleLoader__.load({
 				}
 				setCleanArmed(false);
 				void (async () => {
-					// Remove EXACTLY the rows that are succeeded in the
-					// confirmed snapshot, reusing the per-item remove action
-					// (sequential: the Host store serializes its writes).
+					// Remove EXACTLY the rows that are succeeded or failed
+					// in the confirmed snapshot, reusing the per-item remove
+					// action (sequential: the Host store serializes every
+					// write through one chain, so an enqueue racing the
+					// sweep simply lands between two removes).
 					for (const item of items) {
-						if (item.status !== 'succeeded') continue;
+						if (item.status !== 'succeeded' && item.status !== 'failed') continue;
 						await postQueueAction({ action: 'remove', id: item.id });
 					}
 				})().then(refresh);
 			};
+			/** The stats strip from the read model's `stats` fields, when present. */
+			const statsStrip = queue !== null && typeof queue.stats === 'object' && queue.stats !== null
+				? [
+					`${queue.stats.runningVsCap ?? queue.stats.running ?? 0} ${t('queue.item.running')}`,
+					`${queue.stats.queued ?? 0} ${t('queue.item.queued')}`,
+					`${queue.stats.failed ?? 0} ${t('queue.item.failed')}`,
+				].join(' · ')
+				: null;
 			return h('div', { className: 'dsf-root' },
-				h('button', {
-					type: 'button',
-					className: 'dsf-back',
-					onClick: onBack,
-					'aria-label': t('queue.back'),
-				}, t('queue.back')),
 				h('div', { className: 'dsf-queueBar' },
 					h('div', { className: 'dsf-planTitle' }, t('queue.title')),
-					succeeded.length > 0
-						? h('button', {
-							type: 'button',
-							className: `dsf-queueAction dsf-queueActionClean${armed ? ' dsf-queueActionArmed' : ''}`,
-							onClick: onClean,
-							title: t('queue.cleanAria'),
-							'aria-label': t('queue.cleanAria'),
-						}, armed ? t('queue.cleanConfirm') : t('queue.clean'))
-						: null),
+					// Always visible — discoverable even with nothing to
+					// clean; then disabled, with the tooltip carrying why.
+					h('button', {
+						type: 'button',
+						className: `dsf-queueAction dsf-queueActionClean${armed ? ' dsf-queueActionArmed' : ''}`,
+						onClick: onClean,
+						disabled: cleanable.length === 0,
+						title: cleanable.length === 0 ? t('queue.cleanDisabled') : t('queue.cleanAria'),
+						'aria-label': t('queue.cleanAria'),
+					}, armed ? t('queue.cleanConfirm') : t('queue.clean'))),
+				statsStrip !== null ? h('div', { className: 'dsf-queueStrip' }, statsStrip) : null,
 				queue?.halted === true
 					? h('div', { className: 'dsf-queueHalted' },
 						h('div', { className: 'dsf-queueHaltedTitle' }, t('queue.halted')),
@@ -397,21 +442,31 @@ window.__ModuleLoader__.load({
 					: items.length === 0
 						? h('div', { className: 'dsf-empty' },
 							h('div', { className: 'dsf-emptyTitle' }, t('queue.empty')))
-						: h('div', { className: 'dsf-planList', role: 'list' }, items.map((item) => h('div', {
+						: h('ul', { className: 'dsf-queueList' }, items.map((item) => h('li', {
 							className: `dsf-queueRow${item.status === 'running' ? ' dsf-planRowActive' : ''}`,
-							role: 'listitem',
 							key: item.id,
 						},
 						h(StatusDot, { status: QUEUE_STATUS_TO_DOT[item.status] ?? 'pending' }),
 						h('div', { className: 'dsf-queueMain' },
 							h('div', { className: 'dsf-queueTitle' },
-								h('span', { className: 'dsf-queueId' }, `[${item.id}]`),
 								h('span', { className: 'dsf-queueStatus' }, t(`queue.item.${QUEUE_STATUS_TO_DOT[item.status] === 'failed' ? 'failed' : item.status}`)),
 								typeof item.summary === 'string' && item.summary !== '' ? item.summary : ''),
 							h('div', { className: 'dsf-queueMeta' },
 								Array.isArray(item.scopes) && item.scopes.length > 0
 									? item.scopes.join(', ')
 									: t('queue.wholeWorkspace')),
+							// The mode·model·effort chip: the agent preset (mode) and
+							// selection this item's worker runs under (the
+							// enqueue-time snapshots), shown when the read model
+							// carries either.
+							(typeof item.selection?.provider === 'string' && typeof item.selection?.model === 'string')
+								|| typeof item.agentPreset === 'string' && item.agentPreset !== ''
+								? h('div', { className: 'dsf-queueModel' },
+									`${typeof item.agentPreset === 'string' && item.agentPreset !== '' ? `${item.agentPreset} · ` : ''}${typeof item.selection?.provider === 'string' && typeof item.selection?.model === 'string' ? `${item.selection.provider}/${item.selection.model}${typeof item.selection.reasoningEffort === 'string' && item.selection.reasoningEffort !== '' ? ` · ${item.selection.reasoningEffort}` : ''}` : ''}`)
+								: null,
+							typeof item.modelNote === 'string' && item.modelNote !== ''
+								? h('div', { className: 'dsf-queueModelNote' }, item.modelNote)
+								: null,
 							typeof item.failureReason === 'string' && item.failureReason !== ''
 								? h('div', { className: 'dsf-queueFailure' }, item.failureReason)
 								: null),
@@ -445,11 +500,13 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
-		 * The queue page's live wrapper: polls the Host's read-only queue.json
-		 * route while mounted (same-origin fetch; this bundle runs as a real
-		 * browser script) and renders the pure page from the latest snapshot.
+		 * The queue panel's live wrapper: polls the Host's read-only queue.json
+		 * route while MOUNTED — the panel is the only poller, so with the
+		 * panel closed there is no background traffic (the rail icon carries
+		 * no badge) — and renders the pure page from the latest snapshot
+		 * (same-origin fetch; this bundle runs as a real browser script).
 		 */
-		function FactoryQueuePageLive({ t, onBack }) {
+		function FactoryQueuePanelLive({ t }) {
 			const [queue, setQueue] = useState(null);
 			const [error, setError] = useState(null);
 			const loadRef = { current: null };
@@ -476,11 +533,10 @@ window.__ModuleLoader__.load({
 					clearInterval(timer);
 				};
 			}, []);
-			return h(FactoryQueuePage, {
+			return h(FactoryQueuePanel, {
 				queue,
 				error,
 				t,
-				onBack,
 				refresh: () => {
 					loadRef.current?.();
 				},
@@ -488,31 +544,28 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
+		 * The rail icon: the factory glyph at the rail's own size. The
+		 * sidebar renders every `sidebar.panellist` entry icon with
+		 * `{ size, active }` owner props; no badge, no polling.
+		 */
+		function FactoryQueuePanelIcon({ size = 16 }) {
+			return h(FactoryGlyph, { size, className: 'dsf-titleIcon' });
+		}
+
+		/**
 		 * The tab body: nine phase rows with live status, the latest narration
 		 * line verbatim, and a quiet empty state when nothing runs. The plan
-		 * phase row is a button that opens the plan detail page, and the nav
-		 * row's Queue button opens the global queue page (both in-tab
-		 * subpages); the framework binds `hooks.factoryState` (this occupant's
+		 * phase row is a button that opens the plan detail page (an in-tab
+		 * subpage); the framework binds `hooks.factoryState` (this occupant's
 		 * inject face) into the `useFactoryState(selector)` selector hook, and
-		 * `t` comes from the registration's `locale` seat.
+		 * `t` comes from the registration's `locale` seat. The global queue
+		 * lives in its own left-sidebar panel, not here.
 		 */
 		function FactoryTabBody({ useFactoryState, t }) {
 			const view = useFactoryState(identity);
 			const [page, setPage] = useState('phases');
-			if (page === 'queue') {
-				return h(FactoryQueuePageLive, { t, onBack: () => setPage('phases') });
-			}
-			/** The Queue nav entry: opens the global queue page from any state. */
-			const queueNav = h('div', { className: 'dsf-nav' },
-				h('button', {
-					type: 'button',
-					className: 'dsf-navButton',
-					onClick: () => setPage('queue'),
-					title: t('queue.nav'),
-				}, t('queue.nav')));
 			if (view === undefined || view === null) {
 				return h('div', { className: 'dsf-root' },
-					queueNav,
 					h('div', { className: 'dsf-empty' },
 						h('div', { className: 'dsf-emptyTitle' }, t('empty.unavailable'))));
 			}
@@ -523,14 +576,12 @@ window.__ModuleLoader__.load({
 			const started = view.running === true || phases.some((phase) => phase.status !== 'pending');
 			if (!started) {
 				return h('div', { className: 'dsf-root' },
-					queueNav,
 					h('div', { className: 'dsf-empty' },
 						h(FactoryGlyph, { size: 28 }),
 						h('div', { className: 'dsf-emptyTitle' }, t('empty.none')),
 						h('div', { className: 'dsf-emptyHint' }, t('empty.hint'))));
 			}
 			return h('div', { className: 'dsf-root' },
-				queueNav,
 				h('div', { className: 'dsf-list', role: 'list' }, phases.map((phase) => {
 					const status = STATUSES.includes(phase.status) ? phase.status : 'pending';
 					const cells = [
@@ -626,8 +677,9 @@ window.__ModuleLoader__.load({
 
 		/**
 		 * Client plugin body: register the dictionaries, the tab type with its
-		 * guide entry, the tab body + title occupants, and the auto-open
-		 * watcher; return their disposal.
+		 * guide entry, the tab body + title occupants, the auto-open watcher,
+		 * and the global queue panel (rail icon + central main-slot page);
+		 * return their disposal.
 		 * @param {import('@deepseek-ai/cordis').Context} ctx client root context.
 		 * @returns {() => void} cleanup.
 		 */
@@ -663,7 +715,26 @@ window.__ModuleLoader__.load({
 				name: 'sidebar.right.pane.tab.title',
 				key: TAB_ID,
 			}, FactoryTabTitle));
+			// The global queue panel: the central page under the root-scoped
+			// `main` keyed slot, addressed by the SAME id as the rail entry.
+			// Nothing is ever auto-opened into it — the user opens it from
+			// the rail — and it polls queue.json only while mounted.
+			const disposePanel = ctx.slots.inject('main', () => ctx.slots.register({
+				name: 'main',
+				key: PANEL_ID,
+				locale: NS,
+				inject: () => ({}),
+			}, FactoryQueuePanelLive));
+			const disposePanelIcon = ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
+				name: 'sidebar.panellist',
+				id: PANEL_ID,
+				order: PANEL_ORDER,
+				locale: NS,
+				label: () => t('panel.title'),
+			}, FactoryQueuePanelIcon));
 			return () => {
+				disposePanelIcon();
+				disposePanel();
 				disposeTitle();
 				disposeBody();
 			};
