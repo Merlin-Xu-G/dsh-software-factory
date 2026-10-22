@@ -70,6 +70,10 @@ const stubReact = {
 		const cell = hookStore[slot];
 		return [cell.value, (next) => { cell.value = typeof next === 'function' ? next(cell.value) : next; }];
 	},
+	useEffect(effect) {
+		const cleanup = effect();
+		return typeof cleanup === 'function' ? cleanup : undefined;
+	},
 };
 const requiredSpecifiers = [];
 const stubRequire = (specifier) => {
@@ -87,7 +91,7 @@ check('client: factory has no side effects until called', styleTags.length === 0
 const clientExports = loaderRegistration.factory(stubRequire);
 eq('client: required specifiers are exactly ["react"]', requiredSpecifiers, ['react']);
 check('client: exports.apply is a function', typeof clientExports.apply === 'function');
-eq('client: exports.inject', clientExports.inject, ['sidebarRightTabs', 'sidebarRight', 'slots', 'locale', 'sessions']);
+eq('client: exports.inject', clientExports.inject, ['sidebarRightTabs', 'sidebarRight', 'uiWorkspace', 'slots', 'locale', 'sessions']);
 check('client: CSS tag injected at materialization', styleTags.length === 1);
 
 // Fake client ctx: cordis effect + the five injected services.
@@ -133,6 +137,7 @@ const faces = {
 	'session-2': makeFace(pendingView(5)),
 };
 const openedTabs = [];
+const openedSessions = [];
 const mountedListeners = new Set();
 let mountedSessionId;
 const fakeCtx = {
@@ -140,6 +145,9 @@ const fakeCtx = {
 	locale: {
 		register(ns, dicts) { localeRegisterCalls += 1; Object.assign(dictionary, dicts); return () => {}; },
 		bind: () => (key) => `t:${key}`,
+	},
+	uiWorkspace: {
+		openSession(target) { openedSessions.push(target); },
 	},
 	sidebarRightTabs: {
 		register(def) { tabTypeDef = def; return () => {}; },
@@ -284,6 +292,111 @@ faces['session-1'].set(liveView);
 resetHooks();
 hookStore.length = 0;
 
+// Queue page: nav button opens it from any body state; it polls the Host's
+// read-only route (fetch stubbed) and renders items, halt banner, and back.
+let queueSnapshot = { halted: false, items: [
+	{ id: 'q1', status: 'succeeded', summary: 'Retention pipeline', scopes: ['src/retention/'], workerSessionId: 'ws-1' },
+	{ id: 'q2', status: 'running', summary: 'Sidebar bug', scopes: [], workerSessionId: 'ws-2' },
+	{ id: 'q3', status: 'failed', summary: 'Broken thing', scopes: ['src/x/'], failureReason: 'phase 5/9 guardrails failed: lint exit 1 (last: [factory] phase 5/9 guardrails: entering)', workerSessionId: 'ws-3' },
+] };
+const fetchCalls = [];
+globalThis.fetch = (url, options) => {
+	fetchCalls.push({ url, options });
+	return Promise.resolve({ status: 200, json: () => Promise.resolve(queueSnapshot) });
+};
+const listTree2 = flatten(renderBody(faces['session-1']));
+const queueNav = listTree2.find((node) => typeof node === 'object' && node.props.className === 'dsf-navButton');
+check('client: queue nav button present in the phase list', queueNav?.type === 'button' && typeof queueNav?.props.onClick === 'function');
+queueNav.props.onClick();
+flatten(renderBody(faces['session-1'])); // the effect fires (and fetches) during this render
+await new Promise((resolve) => { setTimeout(resolve, 20); }); // data lands in the hook cell
+const queueTree = flatten(renderBody(faces['session-1']));
+const itemLegs = ['t:queue.title', 'Retention pipeline', 'Sidebar bug', 'Broken thing'];
+check('client: queue page lists every item with status',
+	itemLegs.every((leg) => queueTree.includes(leg))
+	&& queueTree.some((node) => typeof node === 'string' && node.includes('phase 5/9 guardrails failed')));
+check('client: running queue item highlighted',
+	queueTree.some((node) => typeof node === 'object' && node.props.className === 'dsf-queueRow dsf-planRowActive'));
+queueSnapshot = { halted: true, haltedBy: 'q3', items: queueSnapshot.items };
+await new Promise((resolve) => { setTimeout(resolve, 20); });
+const haltedTree = flatten(renderBody(faces['session-1']));
+check('client: halt banner and ack hint render',
+	haltedTree.includes('t:queue.halted') && haltedTree.includes('t:queue.ackHint'));
+const queueBack = haltedTree.find((node) => typeof node === 'object' && node.props.className === 'dsf-back');
+check('client: queue page has a back control', queueBack?.type === 'button' && typeof queueBack?.props.onClick === 'function');
+queueBack.props.onClick();
+check('client: back returns to the phase list',
+	flatten(renderBody(faces['session-1'])).some((node) => typeof node === 'object'
+		&& typeof node.props.className === 'string' && node.props.className.startsWith('dsf-list')));
+// Open button jumps to the worker session; Retry posts the action then refreshes.
+const openButtons = haltedTree.filter((node) => typeof node === 'object'
+	&& node.props.className === 'dsf-queueAction');
+eq('client: queue rows carry one Open button per session-bearing item', openButtons.length, 3);
+openButtons[2].props.onClick();
+eq('client: Open jumps to the worker session (plain session id)', openedSessions, ['ws-3']);
+const retryButtons = haltedTree.filter((node) => typeof node === 'object'
+	&& node.props.className === 'dsf-queueAction dsf-queueActionRetry');
+eq('client: exactly the failed item has a Retry button', retryButtons.length, 1);
+fetchCalls.length = 0;
+retryButtons[0].props.onClick();
+await new Promise((resolve) => { setTimeout(resolve, 20); });
+const retryPost = fetchCalls.find((call) => call.options?.method === 'POST');
+check('client: Retry posts the action with the CSRF header',
+	retryPost?.url === '/plugins/@local/dsh-software-factory/queue.json'
+	&& retryPost?.options?.headers?.['x-dsh-factory-action'] === 'queue'
+	&& retryPost?.options?.body === '{"action":"retry","id":"q3"}', { retryPost });
+const removeButtons = haltedTree.filter((node) => typeof node === 'object'
+	&& node.props.className === 'dsf-queueAction dsf-queueActionRemove');
+eq('client: every queue row has a Remove button', removeButtons.length, 3);
+fetchCalls.length = 0;
+removeButtons[0].props.onClick();
+await new Promise((resolve) => { setTimeout(resolve, 20); });
+const removePost = fetchCalls.find((call) => call.options?.method === 'POST');
+check('client: Remove posts the action for that item',
+	removePost?.options?.body === '{"action":"remove","id":"q1"}'
+	&& removePost?.options?.headers?.['x-dsh-factory-action'] === 'queue', { removePost });
+// Clean button: inline two-step confirm sweeping EXACTLY the succeeded rows
+// through the per-item remove action, then auto-resetting.
+queueSnapshot = { halted: false, items: [
+	{ id: 'q1', status: 'succeeded', summary: 'Retention pipeline', scopes: ['src/retention/'], workerSessionId: 'ws-1' },
+	{ id: 'q2', status: 'running', summary: 'Sidebar bug', scopes: [], workerSessionId: 'ws-2' },
+	{ id: 'q3', status: 'failed', summary: 'Broken thing', scopes: ['src/x/'], workerSessionId: 'ws-3' },
+	{ id: 'q4', status: 'queued', summary: 'Queued thing', scopes: [] },
+	{ id: 'q5', status: 'succeeded', summary: 'Exporter', scopes: ['src/export/'], workerSessionId: 'ws-5' },
+] };
+flatten(renderBody(faces['session-1'])).find((node) => typeof node === 'object'
+	&& node.props.className === 'dsf-navButton').props.onClick();
+flatten(renderBody(faces['session-1'])); // the queue page effect fires (and fetches)
+await new Promise((resolve) => { setTimeout(resolve, 20); });
+const cleanButton = findByClass(flatten(renderBody(faces['session-1'])), 'dsf-queueActionClean');
+check('client: Clean button present while succeeded items exist',
+	cleanButton?.type === 'button' && typeof cleanButton?.props.onClick === 'function');
+eq('client: Clean starts disarmed', cleanButton?.children, ['t:queue.clean']);
+fetchCalls.length = 0;
+cleanButton.props.onClick(); // first click only arms
+const confirmButton = findByClass(flatten(renderBody(faces['session-1'])), 'dsf-queueActionClean');
+eq('client: armed Clean shows the inline Confirm label', confirmButton?.children, ['t:queue.cleanConfirm']);
+eq('client: arming posts nothing yet',
+	fetchCalls.filter((call) => call.options?.method === 'POST').length, 0);
+confirmButton.props.onClick(); // second click executes the sweep
+await new Promise((resolve) => { setTimeout(resolve, 20); });
+const cleanPosts = fetchCalls.filter((call) => call.options?.method === 'POST');
+eq('client: Clean removes exactly the succeeded rows via the per-item remove action',
+	cleanPosts.map((call) => call.options?.body),
+	['{"action":"remove","id":"q1"}', '{"action":"remove","id":"q5"}']);
+check('client: Clean posts reuse the queue action route with the CSRF header',
+	cleanPosts.every((call) => call.options?.headers?.['x-dsh-factory-action'] === 'queue'));
+eq('client: Clean auto-resets after executing',
+	findByClass(flatten(renderBody(faces['session-1'])), 'dsf-queueActionClean')?.children, ['t:queue.clean']);
+queueSnapshot = { halted: false, items: queueSnapshot.items.filter((item) => item.status !== 'succeeded') };
+flatten(renderBody(faces['session-1'])); // the effect refetches the emptied board
+await new Promise((resolve) => { setTimeout(resolve, 20); });
+check('client: no succeeded rows means no Clean button',
+	findByClass(flatten(renderBody(faces['session-1'])), 'dsf-queueActionClean') === undefined);
+faces['session-1'].set(liveView);
+resetHooks();
+hookStore.length = 0;
+
 const initialFace = { getSnapshot: () => ({ running: false, phases: Array.from({ length: 9 }, (_, i) => ({ n: i + 1, key: `p${i}`, status: 'pending', text: null })), lastLine: null }), subscribe: () => () => {} };
 const emptyTree = flatten(renderBody(initialFace));
 check('client: pristine session renders the empty state', emptyTree.includes('t:empty.none'));
@@ -327,10 +440,12 @@ clientCleanup();
 const host = await import(pathToFileURL(join(repoRoot, 'index.js')).href);
 
 const defaults = host.Config['~standard'].validate(undefined).value;
-eq('host: config defaults (phases on, deploy off, auto-open on)', [
+eq('host: config defaults (phases on, deploy off, auto-open and grill on, queue 3)', [
 	defaults.plan, defaults.implement, defaults.review, defaults.guardrails, defaults.test, defaults.regression, defaults.evaluate,
-	defaults.deploy.enabled, defaults.deploy.command.length, defaults.autoOpenTab,
-], [true, true, true, true, true, true, true, false, 0, true]);
+	defaults.deploy.enabled, defaults.deploy.command.length, defaults.autoOpenTab, defaults.grill, defaults.queueConcurrency,
+], [true, true, true, true, true, true, true, false, 0, true, true, 3]);
+const badGrill = host.Config['~standard'].validate({ queueConcurrency: 0 });
+check('host: queueConcurrency must be a positive integer', badGrill.issues?.[0]?.message?.includes('queueConcurrency') === true);
 const badConfig = host.Config['~standard'].validate({ planing: true });
 check('host: unknown config key reported as an issue', badConfig.issues?.[0]?.message?.includes('planing') === true);
 
@@ -353,15 +468,32 @@ eq('host: project overrides win for toggles and attach prompts', [merged.test, m
 let projectionDef = null;
 let commandDef = null;
 const projectionDefs = [];
+const sessionEventHandlers = [];
+let routeHandler = null;
+// The queue store must not touch the real DSH home: point the env at a temp
+// dir before apply() creates the store.
+const queueHome = mkdtempSync(join(tmpdir(), 'factory-queue-home-'));
+const previousDshHome = process.env.DSH_HOME;
+process.env.DSH_HOME = queueHome;
+/** Mutable host services the runtime reads via ctx.get — populated per test. */
+const hostServices = {};
 const fakeHostCtx = {
 	inject(deps, callback) {
 		if (deps.includes('sessionProjections')) {
 			callback({ sessionProjections: { register(def) { projectionDefs.push(def); projectionDef = projectionDefs[0]; return () => {}; } } });
 		} else if (deps.includes('commands')) {
 			callback({ commands: { register(def) { commandDef = def; return () => {}; } } });
+		} else if (deps.includes('webServer')) {
+			callback({ webServer: { register(route) { routeHandler = route.handler; return () => {}; } } });
 		}
 		return { dispose() {} };
 	},
+	on(event, handler) {
+		if (event === 'session/event') sessionEventHandlers.push(handler);
+		return () => {};
+	},
+	get(name) { return hostServices[name]; },
+	logger: { warn() {} },
 };
 host.apply(fakeHostCtx, {});
 check('host: projection registered through optional sessionProjections', projectionDef !== null);
@@ -370,7 +502,7 @@ eq('host: command definition', [
 	commandDef?.name, commandDef?.description, commandDef?.input, commandDef?.recordInput,
 ], [
 	'factory', 'Run the 9-phase software-factory delivery pipeline on a request',
-	{ hint: '<request>', attachments: true }, false,
+	{ hint: '[-q|--queue] <request> | queue [ack [id]]', attachments: true }, false,
 ]);
 
 const assistantEvent = (seq, text) => ({
@@ -497,7 +629,362 @@ eq('host: steered message shape matches createUserMessage', [
 	steered[0]?.role, steered[0]?.source, typeof steered[0]?.id, Object.isFrozen(steered[0]),
 ], ['user', { kind: 'user' }, 'string', true]);
 
+// Queue store: the durable state machine over a temp dir. (The autoOpenTab
+// re-apply runs at the very end — a second apply would register a second
+// enqueue listener and route handler over the same queue home and race it.)
+// ---------------------------------------------------------------------------
+const storeDir = mkdtempSync(join(tmpdir(), 'factory-queue-store-'));
+const store = host.createQueueStore({ dir: storeDir });
+const itemA = await store.enqueue({ request: 'Build the retention pipeline', workspace: '/repo/a', scopes: ['src/retention/'] });
+const itemB = await store.enqueue({ request: 'Fix the sidebar bug', workspace: '/repo/a', scopes: ['src/sidebar/'] });
+const itemC = await store.enqueue({ request: 'Same-area change', workspace: '/repo/a', scopes: ['src/retention/deep/'] });
+const itemD = await store.enqueue({ request: 'Other repo change', workspace: '/repo/b', scopes: ['src/'] });
+eq('host: queue: enqueue assigns FIFO ids', [itemA.id, itemB.id, itemC.id, itemD.id], ['q1', 'q2', 'q3', 'q4']);
+await store.markRunning(itemA.id, 'worker-aaaa');
+eq('host: queue: overlapping scope blocks, other workspace passes', [
+	(await store.pickNext(3))?.id, (await store.markRunning(itemB.id, 'worker-bbbb'), await store.pickNext(3))?.id,
+], [itemB.id, itemD.id]);
+eq('host: queue: concurrency cap respected', (await store.pickNext(2)) === null, true);
+await store.markSucceeded(itemA.id);
+eq('host: queue: freed scope unblocks the queued item', (await store.pickNext(3))?.id, itemC.id);
+await store.markRunning(itemC.id, 'worker-cccc');
+await store.markFailed(itemC.id, 'phase 5/9 guardrails failed: lint exit 1');
+const halted = await store.snapshot();
+eq('host: queue: failure halts the queue', [halted.halted, halted.haltedBy], [true, itemC.id]);
+eq('host: queue: halt blocks new starts', (await store.pickNext(3)) === null, true);
+eq('host: queue: ack with the wrong id is refused', await store.ack('q1'), false);
+eq('host: queue: ack resumes the queue', await store.ack(itemC.id), true);
+eq('host: queue: ack leaves the failed item failed',
+	(await store.find(itemC.id))?.status, 'failed');
+// Crash recovery: a fresh store over the same dir re-queues running items.
+const itemE = await store.enqueue({ request: 'Crash victim', workspace: '/repo/a', scopes: ['docs/'] });
+await store.markRunning(itemE.id, 'worker-eeee');
+const recovered = host.createQueueStore({ dir: storeDir });
+eq('host: queue: crash recovery re-queues running items', (await recovered.find(itemE.id))?.status, 'queued');
+// Retry: only failed items; worker session retained; its halt lifted.
+eq('host: queue: retry refuses non-failed items', await store.retry(itemB.id), false);
+eq('host: queue: retry re-queues the failed item and keeps its worker',
+	[await store.retry(itemC.id), (await store.find(itemC.id))?.status, (await store.find(itemC.id))?.workerSessionId, (await store.find(itemC.id))?.failureReason],
+	[true, 'queued', 'worker-cccc', null]);
+eq('host: queue: retry of the halting item cleared the halt', (await store.snapshot()).halted, false);
+// Remove: any status, halting items lift the halt, unknown ids refused.
+eq('host: queue: remove of an unknown id is refused', await store.remove('q99'), false);
+eq('host: queue: remove drops the item',
+	[await store.remove(itemD.id), (await store.snapshot()).items.some((candidate) => candidate.id === itemD.id)],
+	[true, false]);
+await store.markRunning(itemE.id, 'worker-eeee2');
+await store.markFailed(itemE.id, 'halt me');
+eq('host: queue: remove of the halting item lifts the halt', [
+	await store.remove(itemE.id),
+	(await store.snapshot()).halted,
+], [true, false]);
+
+// ---------------------------------------------------------------------------
+// Enqueue listener + queue command grammar (against the temp DSH home).
+// ---------------------------------------------------------------------------
+const tick = () => new Promise((resolve) => { setTimeout(resolve, 20); });
+const fireSessionEvent = (event) => {
+	for (const handler of sessionEventHandlers) handler({ id: 'session-x', header: { cwd: workspace } }, event);
+};
+fireSessionEvent(assistantEvent(7, 'All settled.\n[factory] enqueue: {"request":"Build the retention pipeline","summary":"Retention","scopes":["src/"],"clarifications":[{"question":"Cap where?","answer":"At injection."}]}'));
+await tick();
+await tick();
+const liveStore = host.createQueueStore({ dir: join(queueHome, 'factory-queue') });
+const queueAfterLine = await liveStore.snapshot();
+const enqueued = queueAfterLine.items.find((item) => item.summary === 'Retention');
+check('host: enqueue line creates a queue item with payload and answers',
+	enqueued !== undefined && enqueued.status === 'queued'
+	&& enqueued.request === 'Build the retention pipeline'
+	&& enqueued.scopes.join(',') === 'src/'
+	&& enqueued.clarifications[0]?.answer === 'At injection.'
+	&& enqueued.sourceEvent === 'session-x:7',
+	{ items: queueAfterLine.items.map((item) => item.summary) });
+fireSessionEvent(assistantEvent(7, '[factory] enqueue: {"request":"Build the retention pipeline","summary":"Retention","scopes":["src/"],"clarifications":[]}'));
+await tick();
+eq('host: enqueue listener is idempotent per event seq',
+	(await liveStore.snapshot()).items.filter((item) => item.summary === 'Retention').length, 1);
+
+const queueStatus = await commandDef.handler({ agent: fakeAgent, rawInput: 'queue', attachments: [], signal: undefined });
+eq('host: /factory queue returns status text', [queueStatus.kind, queueStatus.text?.startsWith('Factory queue (concurrency 3):')], ['success', true]);
+const ackNothing = await commandDef.handler({ agent: fakeAgent, rawInput: 'queue ack', attachments: [], signal: undefined });
+eq('host: /factory queue ack with no halt is an error', ackNothing.kind, 'error');
+steered.length = 0;
+const enqueueRun = await commandDef.handler({ agent: fakeAgent, rawInput: '--queue Build the exporter', attachments: [], signal: undefined });
+eq('host: /factory --queue succeeds and steers the interview', enqueueRun.kind, 'success');
+const directive = steered[0]?.content?.find((block) => block?.type === 'text')?.text ?? '';
+check('host: enqueue directive carries the interview contract and request',
+	directive.includes('Factory queue enqueue interview')
+	&& directive.includes('Build the exporter')
+	&& directive.includes('NO batch limit')
+	&& directive.includes('[factory] enqueue:'));
+const enqueueQ = await commandDef.handler({ agent: fakeAgent, rawInput: '-q Another task', attachments: [], signal: undefined });
+check('host: -q short flag also enqueues', enqueueQ.kind === 'success' && steered.length === 2);
+
+// ---------------------------------------------------------------------------
+// Orchestrator end-to-end (isolated runtime over its own store): catches the
+// dead-turn bug — create must carry agentOptions, the worker must be
+// composed with the default agent PRESET (meta.agentPreset + a setup that
+// mounts the preset's tool tree — the tool-less-worker bug) and attached to
+// its workspace, a zero-event worker fails loudly, a completing worker
+// succeeds, retry resumes the SAME session, and the resume path re-mounts
+// the preset the session header recorded.
+// ---------------------------------------------------------------------------
+const { createQueueRuntime } = await import(pathToFileURL(join(repoRoot, 'lib', 'orchestrator.js')).href);
+const orchWorkspace = mkdtempSync(join(tmpdir(), 'factory-orch-ws-'));
+const orchHome = mkdtempSync(join(tmpdir(), 'factory-orch-'));
+const orchStore = host.createQueueStore({ dir: orchHome });
+const agentLog = { created: [], resumed: [], attached: [], followups: [] };
+let fakeSeq = 0;
+let boardForWorker = () => undefined;
+// Fake agentPresets registry: resolve() answers the default ('standard');
+// mount() records the agent context it was handed (the tool-tree mount).
+const presetLog = { resolved: [], mounted: [] };
+const fakePresets = {
+	async resolve(id) { presetLog.resolved.push(id); return { id: id ?? 'standard' }; },
+	async mount(ctx, id) { presetLog.mounted.push({ ctx, id }); return { id }; },
+};
+const makeFakeAgent = (log, sessionId, cwd, meta) => ({
+  session: {
+    id: sessionId,
+    header: { cwd, ...(meta?.agentPreset === undefined ? {} : { agentPreset: meta.agentPreset }) },
+    get seq() { return fakeSeq; },
+  },
+  followup(message) { log.followups.push({ sessionId, message }); },
+  whenIdle() { return Promise.resolve(); },
+});
+/** Fake `agents` service: create/resume run the caller's setup callback the
+ * way the real AgentLoop does (setupAndPublish, before the turn starts). */
+const makeAgentsSurface = (log, { liveCreated = true, resumedPreset } = {}) => ({
+  get: (id) => (liveCreated ? log.created.find((entry) => entry.sessionId === id)?.agent : undefined),
+  async create(options) {
+    const agent = makeFakeAgent(log, options.sessionId, options.meta?.cwd, options.meta);
+    log.created.push({ ...options, agent });
+    if (typeof options.setup === 'function') await options.setup({ setupOf: options.sessionId }, agent);
+    return { agent: log.created.at(-1).agent };
+  },
+  async resume(options) {
+    const agent = makeFakeAgent(log, options.resumeSessionId, orchWorkspace,
+      resumedPreset === undefined ? undefined : { agentPreset: resumedPreset });
+    log.resumed.push({ ...options, agent });
+    if (typeof options.setup === 'function') await options.setup({ setupOf: options.resumeSessionId }, agent);
+    return { agent };
+  },
+});
+const orchServices = {
+  agents: makeAgentsSurface(agentLog),
+  agentDefaultModel: { currentSelection: () => ({ provider: 'deepseek', model: 'test-model' }) },
+  agentPresets: fakePresets,
+  workspaceRegistry: { list: () => [{ path: orchWorkspace, attachSession: (id) => { agentLog.attached.push(id); return Promise.resolve(); } }] },
+  sessionProjections: { stateOf: () => boardForWorker() },
+};
+const orchCtx = { get: (name) => orchServices[name] };
+const runtime = createQueueRuntime(orchCtx, defaults, orchStore);
+const workerItem = await runtime.enqueueAndPump({
+  request: 'Build the retention pipeline',
+  summary: 'Retention',
+  workspace: orchWorkspace,
+  scopes: ['src/'],
+  clarifications: [{ question: 'Cap where?', answer: 'At injection.' }],
+});
+await tick();
+await tick();
+eq('host: orchestrator: worker created with default model options and cwd',
+  [agentLog.created[0]?.agentOptions, agentLog.created[0]?.meta?.cwd],
+  [{ provider: 'deepseek', model: 'test-model' }, orchWorkspace]);
+eq('host: orchestrator: creation composes the default agent preset (the tool bundle)',
+  [agentLog.created[0]?.meta?.agentPreset, typeof agentLog.created[0]?.setup],
+  ['standard', 'function']);
+check('host: orchestrator: the default preset was resolved (no explicit id)',
+  presetLog.resolved.length >= 1 && presetLog.resolved.every((id) => id === undefined),
+  { resolved: presetLog.resolved });
+check('host: orchestrator: creation setup mounted the preset tree on the worker\'s agent context',
+  presetLog.mounted[0]?.id === 'standard' && presetLog.mounted[0]?.ctx?.setupOf === agentLog.created[0]?.sessionId,
+  { mounted: presetLog.mounted.map(({ id, ctx }) => ({ id, ctx })) });
+eq('host: orchestrator: worker attached to its workspace', agentLog.attached.length, 1);
+const workerPrompt = agentLog.followups[0]?.message?.content?.[0]?.text ?? '';
+check('host: orchestrator: steered prompt is the autonomous worker prompt',
+  workerPrompt.startsWith('Factory queue q1: Retention')
+  && workerPrompt.includes('BINDING acceptance inputs')
+  && workerPrompt.includes('Cap where?'));
+const failedWorker = await orchStore.find(workerItem.id);
+eq('host: orchestrator: zero-event worker fails loudly (the dead-turn bug)',
+  [failedWorker?.status, failedWorker?.failureReason],
+  ['failed', 'the worker session recorded no events — its turn never started']);
+// A completing worker succeeds; retry resumes the SAME session with a notice.
+fakeSeq = 42;
+boardForWorker = () => ({
+  running: false,
+  runCount: 0,
+  plan: null,
+  lastLine: '[factory] phase 9/9 evaluate: done',
+  phases: Array.from({ length: 9 }, (_, index) => ({ n: index + 1, key: `p${index}`, status: 'done', text: null })),
+});
+await runtime.retry(workerItem.id);
+await tick();
+await tick();
+eq('host: orchestrator: retry reuses the same worker session (live get, no new create)',
+	[agentLog.followups[1]?.sessionId, agentLog.created.length, agentLog.resumed.length],
+	[failedWorker?.workerSessionId, 1, 0]);
+const retriedPrompt = agentLog.followups[1]?.message?.content?.[0]?.text ?? '';
+check('host: orchestrator: resumed worker gets the retry notice and stays autonomous',
+  retriedPrompt.startsWith('Factory queue q1: Retention')
+  && retriedPrompt.includes('RESUMED after a failed attempt'));
+const retriedItem = await orchStore.find(workerItem.id);
+eq('host: orchestrator: completing worker settles succeeded', retriedItem?.status, 'succeeded');
+
+// The RESUME path (the worker's live agent is gone — restart or disposal):
+// the resume call carries a setup that re-mounts the preset the session
+// header RECORDED at creation, exactly like the controller's resume path.
+const orchHome2 = mkdtempSync(join(tmpdir(), 'factory-orch-resume-'));
+const orchStore2 = host.createQueueStore({ dir: orchHome2 });
+const resumeLog = { created: [], resumed: [], attached: [], followups: [] };
+const resumeServices = {
+  agents: makeAgentsSurface(resumeLog, { liveCreated: false, resumedPreset: 'recorded-preset' }),
+  agentDefaultModel: { currentSelection: () => ({ provider: 'deepseek', model: 'test-model' }) },
+  agentPresets: fakePresets,
+  workspaceRegistry: { list: () => [] },
+  sessionProjections: { stateOf: () => boardForWorker() },
+};
+const resumeRuntime = createQueueRuntime({ get: (name) => resumeServices[name] }, defaults, orchStore2);
+fakeSeq = 0;
+boardForWorker = () => undefined;
+const resumeItem = await resumeRuntime.enqueueAndPump({
+  request: 'Resume me', summary: 'Resume', workspace: orchWorkspace, scopes: [],
+});
+await tick();
+await tick();
+const resumeWorker = await orchStore2.find(resumeItem.id);
+eq('host: orchestrator: dead worker fails (ready for a resuming retry)', resumeWorker?.status, 'failed');
+const mountedBefore = presetLog.mounted.length;
+fakeSeq = 42;
+boardForWorker = () => ({
+  running: false,
+  runCount: 0,
+  plan: null,
+  lastLine: '[factory] phase 9/9 evaluate: done',
+  phases: Array.from({ length: 9 }, (_, index) => ({ n: index + 1, key: `p${index}`, status: 'done', text: null })),
+});
+await resumeRuntime.retry(resumeItem.id);
+await tick();
+await tick();
+check('host: orchestrator: resume mounts the header-recorded preset on the resumed agent context',
+  typeof resumeLog.resumed[0]?.setup === 'function'
+  && presetLog.mounted[mountedBefore]?.id === 'recorded-preset'
+  && presetLog.mounted[mountedBefore]?.ctx?.setupOf === resumeWorker?.workerSessionId,
+  { resumedSetups: resumeLog.resumed.map((entry) => typeof entry.setup), mounted: presetLog.mounted.map(({ id, ctx }) => ({ id, ctx })) });
+eq('host: orchestrator: resumed worker settles succeeded',
+  (await orchStore2.find(resumeItem.id))?.status, 'succeeded');
+
+// Route POST actions: drive a REAL failure through the apply()-wired
+// runtime (a second store instance's writes are invisible to its cached
+// state). The fake agents surface's first worker completes (the listener
+// item queued earlier); its second worker is dead (zero events) and fails,
+// halting the queue — then the POST actions run against that live state.
+let routeCreatedCount = 0;
+hostServices.agents = {
+  get: () => undefined,
+  async create(options) {
+    routeCreatedCount += 1;
+    const healthy = routeCreatedCount !== 2;
+    return {
+      agent: {
+        session: { id: options.sessionId, header: { cwd: options.meta?.cwd }, get seq() { return healthy ? 42 : 0; } },
+        followup() {},
+        whenIdle() { return Promise.resolve(); },
+      },
+    };
+  },
+  async resume(options) {
+    return { agent: { session: { id: options.resumeSessionId, header: {}, get seq() { return 42; } }, followup() {}, whenIdle() { return Promise.resolve(); } } };
+  },
+};
+hostServices.agentDefaultModel = { currentSelection: () => ({ provider: 'deepseek', model: 'test-model' }) };
+hostServices.workspaceRegistry = { list: () => [] };
+hostServices.sessionProjections = {
+  stateOf: (session) => (session.seq > 0
+    ? {
+      running: false,
+      runCount: 0,
+      plan: null,
+      lastLine: '[factory] phase 9/9 evaluate: done',
+      phases: Array.from({ length: 9 }, (_, index) => ({ n: index + 1, key: `p${index}`, status: 'done', text: null })),
+    }
+    : undefined),
+};
+fireSessionEvent(assistantEvent(9, '[factory] enqueue: {"request":"Route retry target","summary":"Route retry","scopes":["route/"],"clarifications":[]}'));
+const makeRes = () => ({
+  status: 0,
+  body: '',
+  writeHead(status) { this.status = status; return this; },
+  end(payload) { this.body = payload ?? ''; return this; },
+});
+const makeReq = (method, headers, body) => {
+  const listeners = {};
+  const req = {
+    method,
+    headers,
+    destroy() {},
+    on(event, cb) { listeners[event] = cb; return this; },
+  };
+  if (body !== undefined) {
+    queueMicrotask(() => {
+      listeners.data?.(body);
+      listeners.end?.();
+    });
+  }
+  return req;
+};
+// All fixture reads go through the route's GET (the queue UI's read model,
+// served from the runtime's own store): minting extra store instances per
+// read would let their crash-recovery persist race the runtime's atomic
+// writes whenever an item is momentarily `running` on disk.
+async function routeSnapshot() {
+  const res = makeRes();
+  await routeHandler(makeReq('GET', {}), res);
+  return JSON.parse(res.body);
+}
+// Poll until the dead worker settles (the pump's serialized writes make
+// fixed ticks racy).
+	let routeItemSnap = null;
+for (let attempt = 0; attempt < 100 && routeItemSnap === null; attempt += 1) {
+	await tick();
+	const snap = await routeSnapshot();
+	routeItemSnap = snap.items.find((item) => item.summary === 'Route retry'
+		&& (item.status === 'failed' || item.status === 'succeeded')) ?? null;
+}
+check('host: route fixture: the earlier queued item completed and the dead worker failed',
+	routeItemSnap?.status === 'failed' && routeItemSnap?.failureReason?.includes('turn never started'),
+	{ routeItemSnap });
+const guardRes = makeRes();
+await routeHandler(makeReq('POST', {}), guardRes);
+eq('host: route: POST without the action header is forbidden', guardRes.status, 403);
+const retryRes = makeRes();
+await routeHandler(makeReq('POST', { 'x-dsh-factory-action': 'queue' }, JSON.stringify({ action: 'retry', id: routeItemSnap?.id })), retryRes);
+await tick();
+await tick();
+const routeAfterSnap = await routeSnapshot();
+eq('host: route: POST retry re-queues, the worker reruns, and the halt lifts', [
+	retryRes.status,
+	routeAfterSnap.items.find((item) => item.id === routeItemSnap?.id)?.status,
+	routeAfterSnap.halted,
+], [200, 'succeeded', false]);
+const badActionRes = makeRes();
+await routeHandler(makeReq('POST', { 'x-dsh-factory-action': 'queue' }, JSON.stringify({ action: 'nope' })), badActionRes);
+eq('host: route: unknown action rejected', badActionRes.status, 400);
+const removeRes = makeRes();
+await routeHandler(makeReq('POST', { 'x-dsh-factory-action': 'queue' }, JSON.stringify({ action: 'remove', id: routeItemSnap?.id })), removeRes);
+await tick();
+eq('host: route: POST remove drops the item', [
+	removeRes.status,
+	(await routeSnapshot()).items.some((item) => item.id === routeItemSnap?.id),
+], [200, false]);
+const retryUnknown = await commandDef.handler({ agent: fakeAgent, rawInput: 'queue retry q99', attachments: [], signal: undefined });
+eq('host: /factory queue retry of an unknown item is an error', retryUnknown.kind, 'error');
+hostServices.agents = undefined;
+
 // autoOpenTab: false builds a projection whose wire view suppresses the open.
+// Runs LAST: a second apply registers a second listener and route handler,
+// and only the queue sections above need the first apply's single wiring.
 host.apply(fakeHostCtx, { autoOpenTab: false });
 eq('host: two projection registrations captured', projectionDefs.length, 2);
 const defOff = projectionDefs[1];

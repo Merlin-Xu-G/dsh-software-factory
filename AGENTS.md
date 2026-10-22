@@ -11,12 +11,15 @@ tab that observes pipeline progress.
 - `cordis.patch.yml` — the single Loader insert row (`id: software-factory`).
 - `index.js` — Host half entry: re-exports the Config schema (Standard Schema
   `~standard`) and the `.factory.yml` parser, and wires the `/factory`
-  command and `factory` session projection fibers.
+  command, `factory` session projection, global queue (store + worker
+  runtime + read-only queue.json route), and the enqueue listener fibers.
 - `lib/` — Host half domain modules, one per file: `phases.js` (pipeline
   identity), `config.js` (row Config + deploy gate), `projection.js`
   (session projection fold + wire view), `project-file.js` (`.factory.yml`
-  parser/reader/merge), `prompt.js` (pipeline prompt), `command.js`
-  (dsh-commands definition + steered message).
+  parser/reader/merge), `prompt.js` (pipeline prompt, grill/autonomous
+  modes), `command.js` (dsh-commands definition + steered message +
+  enqueue directive), `queue.js` (global durable queue store),
+  `orchestrator.js` (queue runtime: worker sessions + verdicts).
 - `client.js` — Web half (ModuleLoader factory): the right-sidebar "Factory"
   tab over the projection's wire view. Must stay one self-contained file —
   a plugin bundle is a single module node whose imports may only be

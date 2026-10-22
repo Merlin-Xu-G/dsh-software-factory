@@ -71,7 +71,7 @@ window.__ModuleLoader__.load({
 		const exports = module.exports;
 		Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
 		const react = require('react');
-		const { createElement: h, Fragment, useState } = react;
+		const { createElement: h, Fragment, useEffect, useState } = react;
 
 		/** Copy namespace registered with the client locale service. */
 		const NS = 'softwareFactory';
@@ -85,6 +85,12 @@ window.__ModuleLoader__.load({
 		const STATUSES = ['pending', 'active', 'done', 'skipped', 'failed'];
 		/** Todo statuses (the captured plan) mapped onto the phase status dots. */
 		const TODO_STATUS_TO_DOT = { pending: 'pending', in_progress: 'active', completed: 'done' };
+		/** Queue item statuses mapped onto the phase status dots. */
+		const QUEUE_STATUS_TO_DOT = { queued: 'pending', running: 'active', succeeded: 'done', failed: 'failed' };
+		/** The queue read model served by this plugin's Host half (read-only). */
+		const QUEUE_URL = '/plugins/@local/dsh-software-factory/queue.json';
+		/** Queue page poll interval. */
+		const QUEUE_POLL_MS = 2000;
 		/** Selector for the framework-bound projection hook (uSES requires one). */
 		const identity = (value) => value;
 		/** Absence source used when the session binding has no projection store. */
@@ -119,6 +125,26 @@ window.__ModuleLoader__.load({
 			'.dsf-planRow .dsf-dot{margin-top:3px}',
 			'.dsf-planRowActive{background:var(--dsw-alias-fill-l1)}',
 			'.dsf-planText{flex:1;min-width:0;color:var(--dsw-alias-label-secondary);white-space:pre-wrap;overflow-wrap:anywhere}',
+			'.dsf-nav{display:flex;justify-content:flex-end}',
+			'.dsf-navButton{background:0 0;border:0;padding:2px 6px;border-radius:var(--dsw-radius-sm);color:var(--dsw-alias-label-secondary);cursor:pointer;font-size:11px;line-height:16px}',
+			'.dsf-navButton:hover,.dsf-navButton:focus-visible{background:var(--dsw-alias-fill-l1);color:var(--dsw-alias-label-primary)}',
+			'.dsf-queueRow .dsf-dot{margin-top:3px}',
+			'.dsf-queueMain{flex:1;min-width:0}',
+			'.dsf-queueTitle{color:var(--dsw-alias-label-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+			'.dsf-queueId{color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums;margin-right:6px}',
+			'.dsf-queueStatus{color:var(--dsw-alias-label-tertiary);margin-right:6px}',
+			'.dsf-queueMeta{color:var(--dsw-alias-label-tertiary);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+			'.dsf-queueFailure{color:var(--dsw-alias-state-error-primary);font-size:11px;overflow-wrap:anywhere}',
+			'.dsf-queueHalted{padding:6px 8px;border:.5px solid var(--dsw-alias-state-error-primary);border-radius:var(--dsw-radius-sm);color:var(--dsw-alias-state-error-primary)}',
+			'.dsf-queueHaltedTitle{font-size:12px}',
+			'.dsf-queueAckHint{font-size:11px;color:var(--dsw-alias-label-secondary)}',
+			'.dsf-queueActions{flex:none;display:flex;flex-direction:row;gap:2px;align-items:flex-start}',
+			'.dsf-queueAction{background:0 0;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-sm);padding:0 4px;color:var(--dsw-alias-label-tertiary);cursor:pointer;font-size:10px;line-height:14px;flex:none}',
+			'.dsf-queueAction:hover,.dsf-queueAction:focus-visible{background:var(--dsw-alias-fill-l1);color:var(--dsw-alias-label-primary)}',
+			'.dsf-queueActionRetry{color:var(--dsw-alias-state-error-primary)}',
+			'.dsf-queueActionRemove:hover,.dsf-queueActionRemove:focus-visible{color:var(--dsw-alias-state-error-primary)}',
+			'.dsf-queueBar{display:flex;align-items:center;justify-content:space-between;gap:8px}',
+			'.dsf-queueActionArmed{color:var(--dsw-alias-state-error-primary);border-color:var(--dsw-alias-state-error-primary)}',
 			'.dsf-last{margin-top:4px;padding:6px 8px;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-fill-l1);font-family:var(--dsw-font-mono);font-size:11px;color:var(--dsw-alias-label-secondary);word-break:break-word}',
 			'.dsf-lastLabel{display:block;margin-bottom:2px;font-size:10px;color:var(--dsw-alias-label-tertiary)}',
 			'.dsf-titleIcon{flex:none}',
@@ -144,6 +170,27 @@ window.__ModuleLoader__.load({
 			'plan.back': '‹ 阶段列表',
 			'plan.empty': '本轮运行还没有记录计划（阶段 2 会用 todo 工具写入）。',
 			'plan.openAria': '查看本轮计划',
+			'queue.nav': '队列',
+			'queue.back': '‹ 阶段列表',
+			'queue.title': '工厂队列',
+			'queue.empty': '队列为空 —— 用 /factory -q <需求> 入队。',
+			'queue.halted': '队列已因失败暂停',
+			'queue.ackHint': '运行 /factory queue ack 恢复调度。',
+			'queue.loadError': '队列状态不可用（读取失败）。',
+			'queue.wholeWorkspace': '（整个工作区）',
+			'queue.item.queued': '待运行',
+			'queue.item.running': '运行中',
+			'queue.item.succeeded': '已完成',
+			'queue.item.failed': '失败',
+			'queue.open': '打开',
+			'queue.retry': '重试',
+			'queue.remove': '移除',
+			'queue.openAria': '打开该队列项的工作器会话',
+			'queue.retryAria': '恢复该失败项的工作器会话并重试',
+			'queue.removeAria': '从队列中移除该项（运行中的工作器会被取消）',
+			'queue.clean': '清理',
+			'queue.cleanConfirm': '确认',
+			'queue.cleanAria': '移除所有已完成的队列项（仅移除队列行；工作器会话保留）',
 			'status.pending': '待执行',
 			'status.active': '进行中',
 			'status.done': '已完成',
@@ -162,6 +209,27 @@ window.__ModuleLoader__.load({
 			'plan.back': '‹ Phases',
 			'plan.empty': 'No plan recorded for this run yet (phase 2 writes it with the todo tool).',
 			'plan.openAria': 'Show the plan for this run',
+			'queue.nav': 'Queue',
+			'queue.back': '‹ Phases',
+			'queue.title': 'Factory queue',
+			'queue.empty': 'The queue is empty — enqueue with /factory -q <request>.',
+			'queue.halted': 'Queue halted by a failure',
+			'queue.ackHint': 'Run /factory queue ack to resume scheduling.',
+			'queue.loadError': 'Queue status unavailable (fetch failed).',
+			'queue.wholeWorkspace': '(whole workspace)',
+			'queue.item.queued': 'queued',
+			'queue.item.running': 'running',
+			'queue.item.succeeded': 'succeeded',
+			'queue.item.failed': 'failed',
+			'queue.open': 'Open',
+			'queue.retry': 'Retry',
+			'queue.remove': 'Remove',
+			'queue.openAria': 'Open this queue item\'s worker session',
+			'queue.retryAria': 'Resume this failed item\'s worker session and retry',
+			'queue.removeAria': 'Remove this item from the queue (a running worker is cancelled)',
+			'queue.clean': 'Clean',
+			'queue.cleanConfirm': 'Confirm',
+			'queue.cleanAria': 'Remove every succeeded queue item (queue rows only; worker sessions are kept)',
 			'status.pending': 'pending',
 			'status.active': 'active',
 			'status.done': 'done',
@@ -250,18 +318,201 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
+		 * Post one queue action (ack/retry) to the Host route. The custom
+		 * `x-dsh-factory-action` header is the CSRF guard: cross-origin
+		 * requests cannot set it without a preflight this host never answers.
+		 * @param {{action: 'ack' | 'retry', id?: string}} body
+		 * @returns {Promise<boolean>} whether the action succeeded.
+		 */
+		function postQueueAction(body) {
+			return fetch(QUEUE_URL, {
+				method: 'POST',
+				headers: { 'content-type': 'application/json', 'x-dsh-factory-action': 'queue' },
+				body: JSON.stringify(body),
+			})
+				.then((response) => response.status === 200)
+				.catch(() => false);
+		}
+
+		/**
+		 * The queue page (renderer): the global factory queue read model —
+		 * one row per item (id, status, summary, scopes, failure reason) with
+		 * an Open button jumping to the worker session and a Retry button on
+		 * failed rows (resumes that worker), a Clean control sweeping the
+		 * SUCCEEDED rows (rows only — worker sessions stay; it reuses the
+		 * per-item remove action once per succeeded item, behind an inline
+		 * two-step confirm: first click arms the button to "Confirm", second
+		 * click executes and the button auto-resets — no browser dialog),
+		 * the halt banner with its ack hint when a failure froze the queue,
+		 * and a back control returning to the phase list.
+		 */
+		function FactoryQueuePage({ queue, error, t, onBack, refresh }) {
+			const items = Array.isArray(queue?.items) ? queue.items : [];
+			const [cleanArmed, setCleanArmed] = useState(false);
+			const succeeded = items.filter((item) => item.status === 'succeeded');
+			const armed = cleanArmed && succeeded.length > 0;
+			/** Two-step Clean: arm → Confirm executes the succeeded-only sweep. */
+			const onClean = () => {
+				if (!armed) {
+					setCleanArmed(true);
+					return;
+				}
+				setCleanArmed(false);
+				void (async () => {
+					// Remove EXACTLY the rows that are succeeded in the
+					// confirmed snapshot, reusing the per-item remove action
+					// (sequential: the Host store serializes its writes).
+					for (const item of items) {
+						if (item.status !== 'succeeded') continue;
+						await postQueueAction({ action: 'remove', id: item.id });
+					}
+				})().then(refresh);
+			};
+			return h('div', { className: 'dsf-root' },
+				h('button', {
+					type: 'button',
+					className: 'dsf-back',
+					onClick: onBack,
+					'aria-label': t('queue.back'),
+				}, t('queue.back')),
+				h('div', { className: 'dsf-queueBar' },
+					h('div', { className: 'dsf-planTitle' }, t('queue.title')),
+					succeeded.length > 0
+						? h('button', {
+							type: 'button',
+							className: `dsf-queueAction dsf-queueActionClean${armed ? ' dsf-queueActionArmed' : ''}`,
+							onClick: onClean,
+							title: t('queue.cleanAria'),
+							'aria-label': t('queue.cleanAria'),
+						}, armed ? t('queue.cleanConfirm') : t('queue.clean'))
+						: null),
+				queue?.halted === true
+					? h('div', { className: 'dsf-queueHalted' },
+						h('div', { className: 'dsf-queueHaltedTitle' }, t('queue.halted')),
+						h('div', { className: 'dsf-queueAckHint' }, t('queue.ackHint')))
+					: null,
+				error !== null && queue === null
+					? h('div', { className: 'dsf-empty' },
+						h('div', { className: 'dsf-emptyTitle' }, t('queue.loadError')))
+					: items.length === 0
+						? h('div', { className: 'dsf-empty' },
+							h('div', { className: 'dsf-emptyTitle' }, t('queue.empty')))
+						: h('div', { className: 'dsf-planList', role: 'list' }, items.map((item) => h('div', {
+							className: `dsf-queueRow${item.status === 'running' ? ' dsf-planRowActive' : ''}`,
+							role: 'listitem',
+							key: item.id,
+						},
+						h(StatusDot, { status: QUEUE_STATUS_TO_DOT[item.status] ?? 'pending' }),
+						h('div', { className: 'dsf-queueMain' },
+							h('div', { className: 'dsf-queueTitle' },
+								h('span', { className: 'dsf-queueId' }, `[${item.id}]`),
+								h('span', { className: 'dsf-queueStatus' }, t(`queue.item.${QUEUE_STATUS_TO_DOT[item.status] === 'failed' ? 'failed' : item.status}`)),
+								typeof item.summary === 'string' && item.summary !== '' ? item.summary : ''),
+							h('div', { className: 'dsf-queueMeta' },
+								Array.isArray(item.scopes) && item.scopes.length > 0
+									? item.scopes.join(', ')
+									: t('queue.wholeWorkspace')),
+							typeof item.failureReason === 'string' && item.failureReason !== ''
+								? h('div', { className: 'dsf-queueFailure' }, item.failureReason)
+								: null),
+						h('div', { className: 'dsf-queueActions' },
+							typeof item.workerSessionId === 'string' && item.workerSessionId !== ''
+								? h('button', {
+									type: 'button',
+									className: 'dsf-queueAction',
+									onClick: () => uiWorkspaceService?.openSession(item.workerSessionId),
+									title: t('queue.openAria'),
+								}, t('queue.open'))
+								: null,
+							item.status === 'failed'
+								? h('button', {
+									type: 'button',
+									className: 'dsf-queueAction dsf-queueActionRetry',
+									onClick: () => {
+										void postQueueAction({ action: 'retry', id: item.id }).then(refresh);
+									},
+									title: t('queue.retryAria'),
+								}, t('queue.retry'))
+								: null,
+							h('button', {
+								type: 'button',
+								className: 'dsf-queueAction dsf-queueActionRemove',
+								onClick: () => {
+									void postQueueAction({ action: 'remove', id: item.id }).then(refresh);
+								},
+								title: t('queue.removeAria'),
+							}, t('queue.remove')))))));
+		}
+
+		/**
+		 * The queue page's live wrapper: polls the Host's read-only queue.json
+		 * route while mounted (same-origin fetch; this bundle runs as a real
+		 * browser script) and renders the pure page from the latest snapshot.
+		 */
+		function FactoryQueuePageLive({ t, onBack }) {
+			const [queue, setQueue] = useState(null);
+			const [error, setError] = useState(null);
+			const loadRef = { current: null };
+			useEffect(() => {
+				let alive = true;
+				const load = () => {
+					fetch(QUEUE_URL)
+						.then((response) => response.json())
+						.then((data) => {
+							if (alive) {
+								setQueue(data);
+								setError(null);
+							}
+						})
+						.catch(() => {
+							if (alive) setError('fetch failed');
+						});
+				};
+				loadRef.current = load;
+				load();
+				const timer = setInterval(load, QUEUE_POLL_MS);
+				return () => {
+					alive = false;
+					clearInterval(timer);
+				};
+			}, []);
+			return h(FactoryQueuePage, {
+				queue,
+				error,
+				t,
+				onBack,
+				refresh: () => {
+					loadRef.current?.();
+				},
+			});
+		}
+
+		/**
 		 * The tab body: nine phase rows with live status, the latest narration
 		 * line verbatim, and a quiet empty state when nothing runs. The plan
-		 * phase row is a button that opens the plan detail page (an in-tab
-		 * subpage); the framework binds `hooks.factoryState` (this occupant's
+		 * phase row is a button that opens the plan detail page, and the nav
+		 * row's Queue button opens the global queue page (both in-tab
+		 * subpages); the framework binds `hooks.factoryState` (this occupant's
 		 * inject face) into the `useFactoryState(selector)` selector hook, and
 		 * `t` comes from the registration's `locale` seat.
 		 */
 		function FactoryTabBody({ useFactoryState, t }) {
 			const view = useFactoryState(identity);
 			const [page, setPage] = useState('phases');
+			if (page === 'queue') {
+				return h(FactoryQueuePageLive, { t, onBack: () => setPage('phases') });
+			}
+			/** The Queue nav entry: opens the global queue page from any state. */
+			const queueNav = h('div', { className: 'dsf-nav' },
+				h('button', {
+					type: 'button',
+					className: 'dsf-navButton',
+					onClick: () => setPage('queue'),
+					title: t('queue.nav'),
+				}, t('queue.nav')));
 			if (view === undefined || view === null) {
 				return h('div', { className: 'dsf-root' },
+					queueNav,
 					h('div', { className: 'dsf-empty' },
 						h('div', { className: 'dsf-emptyTitle' }, t('empty.unavailable'))));
 			}
@@ -272,12 +523,14 @@ window.__ModuleLoader__.load({
 			const started = view.running === true || phases.some((phase) => phase.status !== 'pending');
 			if (!started) {
 				return h('div', { className: 'dsf-root' },
+					queueNav,
 					h('div', { className: 'dsf-empty' },
 						h(FactoryGlyph, { size: 28 }),
 						h('div', { className: 'dsf-emptyTitle' }, t('empty.none')),
 						h('div', { className: 'dsf-emptyHint' }, t('empty.hint'))));
 			}
 			return h('div', { className: 'dsf-root' },
+				queueNav,
 				h('div', { className: 'dsf-list', role: 'list' }, phases.map((phase) => {
 					const status = STATUSES.includes(phase.status) ? phase.status : 'pending';
 					const cells = [
@@ -314,8 +567,13 @@ window.__ModuleLoader__.load({
 		}
 
 		/** Required client services: the tab-type registry, the navigation
-		 * controller (auto-open), slots, copy, sessions. */
-		const inject = ['sidebarRightTabs', 'sidebarRight', 'slots', 'locale', 'sessions'];
+		 * controller (auto-open), workspace session opening (queue rows),
+		 * slots, copy, sessions. */
+		const inject = ['sidebarRightTabs', 'sidebarRight', 'uiWorkspace', 'slots', 'locale', 'sessions'];
+
+		/** The uiWorkspace service, captured at apply() for the queue rows'
+		 * Open buttons (components receive only hook props). */
+		let uiWorkspaceService = null;
 
 		/**
 		 * Auto-open watcher: subscribe to the on-screen Session observable and,
@@ -374,6 +632,7 @@ window.__ModuleLoader__.load({
 		 * @returns {() => void} cleanup.
 		 */
 		function apply(ctx) {
+			uiWorkspaceService = ctx.uiWorkspace ?? null;
 			ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'software-factory: dictionaries');
 			const t = ctx.locale.bind(NS);
 			ctx.effect(() => ctx.sidebarRightTabs.register({
