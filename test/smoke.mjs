@@ -1070,6 +1070,71 @@ check('host: /factory queue text surfaces the branch and the PR link',
   orchStatusText.includes('branch feature/retention')
   && orchStatusText.includes('https://github.com/org/repo/pull/7'), { orchStatusText });
 
+// A board whose trailing phases are SKIPPED (a workspace whose .factory.yml
+// disables guardrails/test/regression/evaluate — the dsh-memories shape)
+// still settles succeeded: the final phase reached a terminal verdict. The
+// old done-only rule failed exactly these completed runs with "the worker
+// settled before completing phase 9/9".
+boardForWorker = () => ({
+  running: false,
+  runCount: 0,
+  plan: null,
+  delivery: null,
+  lastLine: '[factory] phase 9/9 evaluate: skip (disabled by configuration)',
+  phases: [
+    { n: 1, key: 'capture', status: 'done', text: null },
+    { n: 2, key: 'plan', status: 'done', text: null },
+    { n: 3, key: 'implement', status: 'done', text: null },
+    { n: 4, key: 'review', status: 'done', text: null },
+    { n: 5, key: 'guardrails', status: 'skipped', text: 'skip (disabled by configuration)' },
+    { n: 6, key: 'test', status: 'skipped', text: 'skip (disabled by configuration)' },
+    { n: 7, key: 'deploy', status: 'skipped', text: 'skip (no test environment configured)' },
+    { n: 8, key: 'regression', status: 'skipped', text: 'skip (disabled by configuration)' },
+    { n: 9, key: 'evaluate', status: 'skipped', text: 'skip (disabled by configuration)' },
+  ],
+});
+const disabledTailItem = await runtime.enqueueAndPump({
+  request: 'Prompt-only rewrite with trailing phases disabled',
+  summary: 'Disabled tail',
+  workspace: orchWorkspace,
+});
+await tick();
+await tick();
+const disabledTail = await orchStore.find(disabledTailItem.id);
+eq('host: orchestrator: a final skipped phase (disabled by .factory.yml) settles succeeded',
+  [disabledTail?.status, disabledTail?.failureReason], ['succeeded', null]);
+check('host: orchestrator: the skipped-tail settle does not invent a delivery',
+  disabledTail?.delivery === null, { delivery: disabledTail?.delivery });
+
+// The guard the relaxation must keep: a worker that settles while its board
+// is still MID-RUN (final phase pending) fails loudly — the queue can never
+// mistake an abandoned run for a completed one.
+boardForWorker = () => ({
+  running: true,
+  runCount: 0,
+  plan: null,
+  delivery: null,
+  lastLine: '[factory] phase 3/9 implement: implementing tasks 1-2',
+  phases: [
+    { n: 1, key: 'capture', status: 'done', text: null },
+    { n: 2, key: 'plan', status: 'done', text: null },
+    { n: 3, key: 'implement', status: 'active', text: 'implementing tasks 1-2' },
+    ...Array.from({ length: 6 }, (_, index) => ({ n: index + 4, key: `p${index}`, status: 'pending', text: null })),
+  ],
+});
+const abandonedItem = await runtime.enqueueAndPump({
+  request: 'Worker that goes idle mid-run',
+  summary: 'Abandoned',
+  workspace: orchWorkspace,
+});
+await tick();
+await tick();
+const abandoned = await orchStore.find(abandonedItem.id);
+check('host: orchestrator: a mid-run settle still fails loudly',
+  abandoned?.status === 'failed'
+  && abandoned?.failureReason.startsWith('the worker settled before completing phase 9/9'),
+  { status: abandoned?.status, failureReason: abandoned?.failureReason });
+
 // The RESUME path (the worker's live agent is gone — restart or disposal):
 // the resume call carries a setup that re-mounts the preset the session
 // header RECORDED at creation, exactly like the controller's resume path.
