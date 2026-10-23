@@ -34,7 +34,7 @@ alone drives the tab's per-phase icon (see "Web client" below).
 
 | # | Key | Phase | Driven by |
 |---|-----|-------|-----------|
-| 1 | `capture` | Capture the request | restate goal, deliverables, constraints; grill mode (default): unbounded `ask_user_question` batches across a fixed checklist until every dimension has the user's explicit answer (`grill: false` falls back to ask-only-when-ambiguous) |
+| 1 | `capture` | Capture the request | restate goal, deliverables, constraints; grill mode (default): unbounded `ask_user_question` batches across a fixed checklist until every dimension has the user's explicit answer (`grill: false` falls back to ask-only-when-ambiguous). Either way the interview NEVER asks, suggests, or mines workspace rules for anything about git delivery — branch/commit/push/PR/base are non-negotiable (see Git delivery) |
 | 2 | `plan` | Plan the tasks | a DETAILED plan for long runs: the session's planning facilities (todo list, or `exit_plan_mode` in plan mode), one todo per task naming goal, write scope, verification, and dependencies |
 | 3 | `implement` | Implement the tasks | file tools (read/edit/write); for larger scopes, one subagent per task with disjoint write scopes |
 | 4 | `review` | Review the implementation | re-read the full diff against the plan; defect, security, debug-code, and dead-code pass; verify no task was quietly deferred; fix findings before guardrails |
@@ -60,6 +60,17 @@ instructions live in the pipeline prompt (no host-side git code: the worker
 runs `git`/`gh` through its shell tool like any other phase), and delivery is
 hardwired: there is no configuration switch.
 
+- **Non-negotiable in interviews.** The enqueue interview and the capture
+  grilling (grill mode and ask-only-when-ambiguous alike) NEVER ask,
+  suggest, or mine workspace rules (AGENTS.md, README, project docs) for
+  anything about git delivery — branch, commit, push, PR, or PR base. The
+  PR base is not a clarification dimension: only `--base` on `/factory` or
+  an explicit `"base"` field in the enqueue JSON names it (default `main`).
+  The only opt-out is the user explicitly refusing delivery in their own
+  words, unprompted ('no PR', 'don't commit', 'report-only', 'no push'):
+  the run then skips the WHOLE delivery — no branch, commit, push, or PR —
+  with the delivery-line note 'git delivery declined by request'. Ambiguous
+  or partial phrasing delivers fully.
 - **Branch at run start, before phase 1.** Preflight: skip git entirely when
   the workspace is not a git repository (noted in the phase-9 report); fail
   before branching on a dirty tree (naming the dirty paths — pre-existing
@@ -150,7 +161,8 @@ Notes:
   its guide entry) stays available either way. Set `autoOpenTab: false` to
   keep the sidebar untouched by `/factory` runs.
 - `grill: false` restores ask-only-when-materially-ambiguous behavior; the
-  detailed-plan requirements of phase 2 stay on either way.
+  detailed-plan requirements of phase 2 stay on either way — and neither
+  mode ever asks about git delivery (see Git delivery).
 - `queueConcurrency` is the queue's concurrent worker cap (see the queue
   section below); a positive integer.
 - Unknown config keys fail at plugin activation (typos never silently
@@ -329,7 +341,11 @@ session, executed by **worker sessions** the plugin itself starts:
   grilling as an interactive run. The interview ends with one
   `[factory] enqueue: {json}` line; the plugin's host listener turns it into
   a queue item (idempotent per session event, so replays never duplicate).
-  A `--base <branch>` flag on the command flows into the interview's
+  The interview never asks, suggests, or mines workspace rules for anything
+  about git delivery — branch, commit, push, PR, or PR base are
+  non-negotiable; only the user's own unprompted explicit refusal skips the
+  worker's delivery ('git delivery declined by request'). A
+  `--base <branch>` flag on the command flows into the interview's
   structural answers and is carried verbatim as the JSON's `"base"` field —
   the PR base for the worker's git delivery.
 - **Workers are root sessions**: each item runs in its own agent session in

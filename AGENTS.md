@@ -42,8 +42,12 @@ pipeline progress and a left-sidebar panel that observes the queue.
   `.js` file plus a behavioral smoke run (`npm test` in this repository);
   quote the real outputs in the report. Never claim success without
   same-turn on-disk evidence.
-- **No agent git commits** in this repository. The user and the Lead review;
-  they commit. Do not run `plugin_manager` here either: installation happens
+- **Delivery: branch + PR, never commits on `main`** in this repository.
+  Agents never commit directly on `main`; every change is delivered as a
+  branch plus a ready-for-review PR — the factory pipeline's automatic git
+  delivery, or `/draft-commit` + `/draft-pr` from dsh-git-actions. The user
+  reviews and merges.
+- Do not run `plugin_manager` here either: installation happens
   from the settings repo's session by the Lead/user.
 - **Reinstall + restart**: after this package is (re)installed into a profile,
   the running Host keeps serving the old module generation until DSH restarts.
