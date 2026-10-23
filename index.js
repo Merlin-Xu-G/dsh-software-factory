@@ -141,6 +141,12 @@ export function apply(ctx, config) {
       // Creator, …) — snapshotted the same way, so the worker composes
       // with that preset's tool tree instead of always the default's.
       const agentPreset = captureSessionPreset(ctx, session);
+      // The enqueue JSON's "base" — the PR base branch for the worker's git
+      // delivery (carried from a --base flag or named in the interview);
+      // invalid values are dropped leniently like the model overrides.
+      const base = typeof payload.base === 'string' && payload.base.trim() !== ''
+        ? payload.base.trim()
+        : null;
       await runtime.enqueueAndPump({
         request: typeof payload.request === 'string' && payload.request !== ''
           ? payload.request
@@ -155,6 +161,7 @@ export function apply(ctx, config) {
           : [],
         ...(selection === null ? {} : { selection }),
         ...(agentPreset === null ? {} : { agentPreset }),
+        ...(base === null ? {} : { base }),
         sourceEvent,
       });
     }).catch((error) => {
@@ -211,6 +218,8 @@ export function apply(ctx, config) {
                 selection: item.selection,
                 agentPreset: item.agentPreset,
                 modelNote: item.modelNote,
+                base: item.base,
+                delivery: item.delivery,
               })),
             });
           }

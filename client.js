@@ -155,6 +155,10 @@ window.__ModuleLoader__.load({
 			'.dsf-queueMeta{color:var(--dsw-alias-label-tertiary);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
 			'.dsf-queueModel{color:var(--dsw-alias-label-secondary);font-size:11px;font-family:var(--dsw-font-mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
 			'.dsf-queueModelNote{color:var(--dsw-alias-label-tertiary);font-size:11px;overflow-wrap:anywhere}',
+			'.dsf-queueDelivery{display:flex;flex-direction:row;gap:6px;align-items:baseline;min-width:0;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+			'.dsf-queueBranch{color:var(--dsw-alias-label-secondary);font-family:var(--dsw-font-mono);overflow:hidden;text-overflow:ellipsis}',
+			'.dsf-queuePr{flex:none;color:var(--dsw-alias-label-primary);text-decoration:underline}',
+			'.dsf-queueDeliveryNote{color:var(--dsw-alias-label-tertiary);overflow:hidden;text-overflow:ellipsis}',
 			'.dsf-queueFailure{color:var(--dsw-alias-state-error-primary);font-size:11px;overflow-wrap:anywhere}',
 			'.dsf-queueHalted{padding:6px 8px;border:.5px solid var(--dsw-alias-state-error-primary);border-radius:var(--dsw-radius-sm);color:var(--dsw-alias-state-error-primary)}',
 			'.dsf-queueHaltedTitle{font-size:12px}',
@@ -214,6 +218,7 @@ window.__ModuleLoader__.load({
 			'queue.cleanConfirm': '确认',
 			'queue.cleanAria': '移除所有已完成和失败的队列项（仅移除队列行，保留工作器会话；被移除失败项造成的暂停会随之解除）',
 			'queue.cleanDisabled': '没有可清理的项 —— 清理只作用于已完成和失败的队列行',
+			'queue.pr': 'PR',
 			'status.pending': '待执行',
 			'status.active': '进行中',
 			'status.done': '已完成',
@@ -253,6 +258,7 @@ window.__ModuleLoader__.load({
 			'queue.cleanConfirm': 'Confirm',
 			'queue.cleanAria': 'Remove every succeeded and failed queue item (queue rows only; worker sessions are kept; a halt caused by a removed failure lifts)',
 			'queue.cleanDisabled': 'Nothing to clean — the sweep only removes succeeded and failed rows',
+			'queue.pr': 'PR',
 			'status.pending': 'pending',
 			'status.active': 'active',
 			'status.done': 'done',
@@ -355,6 +361,33 @@ window.__ModuleLoader__.load({
 			})
 				.then((response) => response.status === 200)
 				.catch(() => false);
+		}
+
+		/**
+		 * One queue row's git-delivery chip: the mono branch name, a PR link
+		 * to the recorded URL, and the degradation note for push-only (or
+		 * no-git) runs. Hidden when the read model carries no delivery. The
+		 * PR link renders only for http(s) URLs — anything else the worker
+		 * recorded becomes inert text (a `javascript:` URI can never ride
+		 * the href attribute).
+		 */
+		function FactoryDeliveryChip({ item, t }) {
+			const delivery = item?.delivery;
+			const branch = typeof delivery?.branch === 'string' && delivery.branch !== '' ? delivery.branch : null;
+			const pr = typeof delivery?.pr === 'string' && delivery.pr !== '' ? delivery.pr : null;
+			const prUrl = pr !== null && /^https?:\/\//i.test(pr) ? pr : null;
+			const note = typeof delivery?.note === 'string' && delivery.note !== '' ? delivery.note : null;
+			if (branch === null && pr === null && note === null) return null;
+			return h('div', { className: 'dsf-queueDelivery' },
+				branch !== null ? h('span', { className: 'dsf-queueBranch' }, branch) : null,
+				prUrl !== null ? h('a', {
+					className: 'dsf-queuePr',
+					href: prUrl,
+					target: '_blank',
+					rel: 'noreferrer noopener',
+				}, t('queue.pr')) : null,
+				pr !== null && prUrl === null ? h('span', { className: 'dsf-queueDeliveryNote' }, pr) : null,
+				note !== null ? h('span', { className: 'dsf-queueDeliveryNote' }, note) : null);
 		}
 
 		/**
@@ -464,6 +497,8 @@ window.__ModuleLoader__.load({
 								? h('div', { className: 'dsf-queueModel' },
 									`${typeof item.agentPreset === 'string' && item.agentPreset !== '' ? `${item.agentPreset} · ` : ''}${typeof item.selection?.provider === 'string' && typeof item.selection?.model === 'string' ? `${item.selection.provider}/${item.selection.model}${typeof item.selection.reasoningEffort === 'string' && item.selection.reasoningEffort !== '' ? ` · ${item.selection.reasoningEffort}` : ''}` : ''}`)
 								: null,
+							// The git-delivery chip: branch + PR link + note.
+							h(FactoryDeliveryChip, { item, t }),
 							typeof item.modelNote === 'string' && item.modelNote !== ''
 								? h('div', { className: 'dsf-queueModelNote' }, item.modelNote)
 								: null,

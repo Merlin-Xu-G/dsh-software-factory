@@ -2,10 +2,12 @@
 
 A DSH (DeepSeek Harness) Host plugin bundle that adds the **`/factory <request>`**
 slash command: a managed software-delivery pipeline with exactly nine phases,
-executed by the session's agent through DSH-native machinery.
+executed by the session's agent through DSH-native machinery — and delivering
+every run through git automatically (branch, commits, push, PR).
 
 ```
 /factory Add CSV export to the settings page
+/factory --base release/1.2 Port the exporter to v2
 ```
 
 The command steers one model-visible user message into the receiving agent —
@@ -50,6 +52,54 @@ exit code is a failure.
 When a command list (guardrails / tests / regression) is not configured, the
 prompt tells the agent to discover the repository's standard checks and run
 those, and to state clearly when none exist.
+
+## Git delivery (always on)
+
+Every run — interactive and queue worker alike — delivers through git. The
+instructions live in the pipeline prompt (no host-side git code: the worker
+runs `git`/`gh` through its shell tool like any other phase), and delivery is
+hardwired: there is no configuration switch.
+
+- **Branch at run start, before phase 1.** Preflight: skip git entirely when
+  the workspace is not a git repository (noted in the phase-9 report); fail
+  before branching on a dirty tree (naming the dirty paths — pre-existing
+  changes never leak into an automated PR); `git fetch origin` first; validate
+  the base; create the working branch from the base's tip with `-2`, `-3`, …
+  suffixes when the name exists locally or on origin.
+- **Branch name: gitflow.** The phase-1 restatement classifies the request
+  into `feature/`, `bugfix/`, `hotfix/`, `chore/`, or `docs/` plus a short
+  kebab-case slug (e.g. `feature/csv-export`).
+- **PR base: `--base <branch>`** on `/factory` (with or without `-q`), or a
+  `"base"` field in the enqueue JSON; default `main`, falling back to the
+  remote's default branch (`origin/HEAD`) when `main` exists nowhere and
+  stating the substitution. A base missing on both origin and locally fails
+  the run before any work. Any existing base is allowed, protected branches
+  included — the factory pushes only its own head branch.
+- **Commits as work lands** (implement/review): one commit per completed
+  task or coherent chunk, review fixes as small fixup commits. Message
+  format is exactly the `/draft-commit` format from dsh-git-actions — first
+  line `type: brief description`, then one-sentence change bullets, no
+  footer. Before every commit the worker refuses to commit run-created
+  secret files (`.env`, `*.pem`, `id_rsa`, `*.key`); finding one fails the
+  run.
+- **Push + PR close phase 9, only after every phase passed.** A failing
+  verification phase loops the pipeline back to plan (no iteration cap)
+  until everything passes. Then one `git push -u origin <branch>` and one
+  ready-for-review PR created exactly the `/draft-pr` way:
+  `gh pr create --base <base> --head <branch> --title '<type>: …' --body-file …`
+  with a `## Summary` bullet list mirroring the branch's commit bullets and
+  a `## Verification` section fed by the phase evidence.
+- **Degradations, honestly reported.** No `origin` remote → local-only
+  delivery (branch + commit, no push/PR, warning recorded). Push failure
+  (auth/network) → the run fails and is retryable. `gh` missing or a
+  non-GitHub repo → the run SUCCEEDS push-only with the note
+  'pushed, no PR — gh missing / not a GitHub repo'. An open PR already
+  existing for the branch fails the pipeline for manual handling; merging
+  and every post-PR step stay with the user.
+- **The delivery line.** Right before the final phase-9 status line the run
+  emits `[factory] delivery: {"branch":"…","pr":"…","note":"…"}`. The
+  projection folds it (state v7) and the queue stores it on the item, so the
+  queue panel shows the branch + PR link and `/factory queue` prints them.
 
 ## Install
 
@@ -264,6 +314,7 @@ session, executed by **worker sessions** the plugin itself starts:
 
 ```
 /factory -q Build the retention pipeline      # or --queue
+/factory -q --base release/1.2 Ship the port  # PR base for the worker
 /factory queue                                # queue status text
 /factory queue ack [id]                       # acknowledge a halt and resume
 ```
@@ -274,6 +325,9 @@ session, executed by **worker sessions** the plugin itself starts:
   grilling as an interactive run. The interview ends with one
   `[factory] enqueue: {json}` line; the plugin's host listener turns it into
   a queue item (idempotent per session event, so replays never duplicate).
+  A `--base <branch>` flag on the command flows into the interview's
+  structural answers and is carried verbatim as the JSON's `"base"` field —
+  the PR base for the worker's git delivery.
 - **Workers are root sessions**: each item runs in its own agent session in
   the item's workspace — created with the item's model selection (see the
   next bullet; a worker without a model never runs), attached to that
@@ -316,9 +370,17 @@ session, executed by **worker sessions** the plugin itself starts:
   the failed row's Retry button resumes the SAME worker session (its
   transcript and answers carry over) with a retry notice; the halt lifts.
 - **Durability**: the queue is a JSON document under
-  `$DSH_HOME/factory-queue/queue.json`, written atomically on every change;
-  after a restart, items left running are re-queued (their orphaned worker
-  sessions stay in the sidebar) and scheduling resumes.
+  `$DSH_HOME/factory-queue/queue.json`, written atomically on every change
+  (the rename retries briefly on Windows's transient EPERM while another
+  handle holds the file open, so a concurrent reader can never drop an
+  enqueue); after a restart, items left running are re-queued (their
+  orphaned worker sessions stay in the sidebar) and scheduling resumes.
+- **Git delivery metadata**: a succeeding worker's
+  `[factory] delivery:` line settles onto the item as `delivery`
+  (`{branch, pr, note}`); the queue panel renders the branch name, a PR
+  link to the recorded URL, and the degradation note for push-only runs,
+  and `/factory queue` prints `branch <name>, PR <url>` on the item line.
+  Items enqueued before this existed simply carry no delivery.
 - **Queue UI**: a global left-sidebar panel (an icon in the sidebar rail —
   the factory glyph, always present — opening a central page; it is never
   auto-opened) polls the plugin's same-origin route
@@ -383,9 +445,11 @@ session, executed by **worker sessions** the plugin itself starts:
   later phase-1 line starts a fresh run; `command/run` events naming this
   command bump the monotonic `runCount` (the auto-open signal), the wire
   view carries the row config's `autoOpenTab` switch as `autoOpen` so the
-  client honors the same declarative configuration, and `todo/write`
+  client honors the same declarative configuration, `todo/write`
   snapshots fold into the durable `plan` while a run is active (v5; the
-  shipped `todos` projection is turn-scoped).
+  shipped `todos` projection is turn-scoped), and the
+  `[factory] delivery: {json}` line folds the git-delivery outcome
+  (`{branch, pr, note}`) for the queue's read side (v7).
 - **Locale**: `locale/en.json` + `locale/zh.json` carry the Plugin Manager
   title/description; `icon.svg` is the card icon; the client tab registers
   its own `softwareFactory` dictionary with the client locale service.
