@@ -782,6 +782,11 @@ eq('host: exactly one steered message', steered.length, 1);
 const steeredText = steered[0]?.content?.find((block) => block?.type === 'text')?.text ?? '';
 check('host: steered message carries the pipeline prompt and the request',
 	steeredText.includes('# Software factory — 9-phase delivery pipeline') && steeredText.includes('Add CSV export'));
+check('host: grill capture prompt carries the delivery non-negotiation rule',
+	steeredText.includes('Git delivery is non-negotiable')
+	&& steeredText.includes('NEVER ask, suggest, or mine workspace rules')
+	&& steeredText.includes('branch, commit, push, PR, or PR base')
+	&& steeredText.includes('git delivery declined by request'));
 eq('host: steered message shape matches createUserMessage', [
 	steered[0]?.role, steered[0]?.source, typeof steered[0]?.id, Object.isFrozen(steered[0]),
 ], ['user', { kind: 'user' }, 'string', true]);
@@ -943,6 +948,11 @@ check('host: enqueue directive carries the interview contract and request',
 	&& directive.includes('Build the exporter')
 	&& directive.includes('NO batch limit')
 	&& directive.includes('[factory] enqueue:'));
+check('host: enqueue directive carries the no-delivery-questions rule',
+	directive.includes('Git delivery is non-negotiable')
+	&& directive.includes('NEVER ask, suggest, or mine workspace rules')
+	&& directive.includes('The PR base is not a clarification dimension')
+	&& directive.includes('git delivery declined by request'));
 const enqueueQ = await commandDef.handler({ agent: fakeAgent, rawInput: '-q Another task', attachments: [], signal: undefined });
 check('host: -q short flag also enqueues', enqueueQ.kind === 'success' && steered.length === 2);
 
@@ -1033,6 +1043,8 @@ check('host: orchestrator: steered prompt is the autonomous worker prompt',
   workerPrompt.startsWith('Factory queue q1: Retention')
   && workerPrompt.includes('BINDING acceptance inputs')
   && workerPrompt.includes('Cap where?'));
+check('host: orchestrator: the autonomous capture block stays without the delivery rule (word-for-word)',
+  !workerPrompt.includes('Git delivery is non-negotiable'));
 check('host: orchestrator: worker prompt carries the git section and the item\'s PR base',
   workerPrompt.includes('## Git delivery (automatic)')
   && workerPrompt.includes('The PR base branch is `develop`'));
