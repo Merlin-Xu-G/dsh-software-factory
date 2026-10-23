@@ -2,8 +2,9 @@
 
 This repository holds `@local/dsh-software-factory`, a DSH (DeepSeek Harness)
 Host plugin bundle: the `/factory` slash command, a 9-phase software-delivery
-pipeline driven through DSH-native machinery, plus a Web-client right-sidebar
-tab that observes pipeline progress.
+pipeline driven through DSH-native machinery, a global worker queue executed
+by worker sessions, plus a Web-client right-sidebar tab that observes
+pipeline progress and a left-sidebar panel that observes the queue.
 
 ## Layout
 

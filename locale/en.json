@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Software Factory",
-    "description": "Adds the /factory command: a 9-phase managed software-delivery pipeline (capture, plan, implement, review, guardrails, test, optional deploy, regression, evaluate) driven through DSH-native tools, with always-on git delivery — every run branches (gitflow name), commits, and opens a ready-for-review PR onto a --base-selectable base (default main)."
+    "description": "Adds the /factory command: a managed 9-phase software-delivery pipeline (capture, plan, implement, review, guardrails, test, optional deploy, regression, evaluate) driven through DSH-native tools, with clarify-first grilling, a right-sidebar progress tab, a global worker queue observed in a left-sidebar panel in the Web client, and always-on git delivery — every run branches (gitflow name), commits in /draft-commit format, and pushes + opens a ready-for-review PR (/draft-pr format) onto a --base-selectable base (default main)."
   }
 }
