@@ -302,12 +302,15 @@ hookStore.length = 0;
 // route (fetch stubbed) while mounted and renders the stats strip, items,
 // halt banner, and action chips. The tab body has no queue nav any more.
 let queueSnapshot = { halted: false, stats: { queued: 0, running: 1, succeeded: 1, failed: 1, runningVsCap: '1/3' }, items: [
-	{ id: 'q1', status: 'succeeded', summary: 'Retention pipeline', scopes: ['src/retention/'], workerSessionId: 'ws-1' },
+	{ id: 'q1', status: 'succeeded', summary: 'Retention pipeline', scopes: ['src/retention/'], workerSessionId: 'ws-1',
+		base: 'main',
+		delivery: { branch: 'feature/retention', pr: 'https://github.com/org/repo/pull/12', note: null } },
 	{ id: 'q2', status: 'running', summary: 'Sidebar bug', scopes: [], workerSessionId: 'ws-2',
 		agentPreset: 'creator',
 		selection: { provider: 'p-sess', model: 'm-sess', reasoningEffort: 'high' } },
 	{ id: 'q3', status: 'failed', summary: 'Broken thing', scopes: ['src/x/'], failureReason: 'phase 5/9 guardrails failed: lint exit 1 (last: [factory] phase 5/9 guardrails: entering)', workerSessionId: 'ws-3',
 		selection: { provider: 'p-gone', model: 'm-gone' },
+		delivery: { branch: 'bugfix/broken-thing', pr: 'javascript:alert(1)', note: 'pushed, no PR — gh missing' },
 		modelNote: 'captured model p-gone/m-gone is unavailable — running on the default selection' },
 ] };
 const fetchCalls = [];
@@ -361,6 +364,22 @@ check('client: model chip omits the effort when none was captured, and the fallb
 	&& !queueTree.some((node) => typeof node === 'string' && /p-gone\/m-gone ·/.test(node))
 	&& queueTree.some((node) => typeof node === 'string'
 		&& node.includes('captured model p-gone/m-gone is unavailable')));
+// The delivery chip: mono branch + PR link to the recorded URL; a push-only
+// note renders without a second link; delivery-less rows hide the chip.
+const prLinks = queueTree.filter((node) => typeof node === 'object' && node.type === 'a');
+check('client: delivery chip renders the branch name and a PR link to the recorded URL',
+	queueTree.includes('feature/retention')
+	&& prLinks.length === 1
+	&& prLinks[0]?.props?.className === 'dsf-queuePr'
+	&& prLinks[0]?.props?.href === 'https://github.com/org/repo/pull/12'
+	&& prLinks[0]?.props?.target === '_blank',
+	{ prLinks: prLinks.map((node) => node.props) });
+check('client: push-only delivery shows branch and note without a PR link',
+	queueTree.includes('bugfix/broken-thing')
+	&& queueTree.some((node) => typeof node === 'string' && node.includes('pushed, no PR — gh missing')));
+check('client: a non-http PR value renders as inert text, never an href',
+	!queueTree.some((node) => typeof node === 'object' && node.props?.href === 'javascript:alert(1)')
+	&& queueTree.some((node) => typeof node === 'string' && node.includes('javascript:alert(1)')));
 check('client: panel has no back control (it is a top-level page, not a subpage)',
 	!queueTree.some((node) => typeof node === 'object' && typeof node.props.className === 'string'
 		&& node.props.className.includes('dsf-back')));
@@ -595,7 +614,7 @@ eq('host: command definition', [
 	commandDef?.name, commandDef?.description, commandDef?.input, commandDef?.recordInput,
 ], [
 	'factory', 'Run the 9-phase software-factory delivery pipeline on a request',
-	{ hint: '[-q|--queue] <request> | queue [ack [id]]', attachments: true }, false,
+	{ hint: '[-q|--queue] [--base <branch>] <request> | queue [ack [id]]', attachments: true }, false,
 ]);
 
 const assistantEvent = (seq, text) => ({
@@ -720,6 +739,34 @@ const viewPlanFresh = projectionDef.wire.view(statePlan);
 projectionDef.wire.viewSchema.parse(viewPlanFresh);
 eq('host: a fresh run clears the plan until phase 2 writes one', viewPlanFresh.plan, null);
 
+// The delivery line (v7): one `[factory] delivery: {json}` line folds the
+// run's git outcome onto the state; malformed lines are ignored, a later
+// line overwrites, and a fresh run clears it. It never becomes lastLine.
+let stateDelivery = projectionDef.init({}, 0);
+stateDelivery = projectionDef.apply(stateDelivery, assistantEvent(1, '[factory] phase 1/9 capture: restated'));
+stateDelivery = projectionDef.apply(stateDelivery, assistantEvent(2, '[factory] delivery: not json'));
+stateDelivery = projectionDef.apply(stateDelivery, assistantEvent(3, '[factory] delivery: {"branch":"feature/csv-export","pr":"https://github.com/org/repo/pull/12"}'));
+let viewDelivery = projectionDef.wire.view(stateDelivery);
+projectionDef.wire.viewSchema.parse(viewDelivery);
+projectionDef.stateSchema.parse(stateDelivery);
+eq('host: delivery line folds {branch,pr}; the malformed line before it is ignored',
+	viewDelivery.delivery, { branch: 'feature/csv-export', pr: 'https://github.com/org/repo/pull/12', note: null });
+eq('host: the delivery line never becomes lastLine',
+	viewDelivery.lastLine, '[factory] phase 1/9 capture: restated');
+stateDelivery = projectionDef.apply(stateDelivery, assistantEvent(4, '[factory] delivery: {"branch":"bugfix/retry-2","pr":null,"note":"pushed, no PR — gh missing / not a GitHub repo"}'));
+viewDelivery = projectionDef.wire.view(stateDelivery);
+projectionDef.wire.viewSchema.parse(viewDelivery);
+eq('host: a later delivery line overwrites (push-only variant)',
+	viewDelivery.delivery, { branch: 'bugfix/retry-2', pr: null, note: 'pushed, no PR — gh missing / not a GitHub repo' });
+stateDelivery = projectionDef.apply(stateDelivery, assistantEvent(5, '[factory] delivery: {"branch":7,"pr":[],"note":{}}'));
+eq('host: garbage delivery fields normalize to nulls inside a valid record',
+	projectionDef.wire.view(stateDelivery).delivery, { branch: null, pr: null, note: null });
+stateDelivery = projectionDef.apply(stateDelivery, assistantEvent(6, '[factory] phase 2/9 plan: pass — planned'));
+stateDelivery = projectionDef.apply(stateDelivery, assistantEvent(7, '[factory] phase 1/9 capture: fresh run'));
+const viewDeliveryFresh = projectionDef.wire.view(stateDelivery);
+projectionDef.wire.viewSchema.parse(viewDeliveryFresh);
+eq('host: a fresh run resets the delivery with the board', viewDeliveryFresh.delivery, null);
+
 // Command handler against a fake agent.
 const steered = [];
 const workspace = mkdtempSync(join(tmpdir(), 'factory-smoke-'));
@@ -738,6 +785,40 @@ check('host: steered message carries the pipeline prompt and the request',
 eq('host: steered message shape matches createUserMessage', [
 	steered[0]?.role, steered[0]?.source, typeof steered[0]?.id, Object.isFrozen(steered[0]),
 ], ['user', { kind: 'user' }, 'string', true]);
+
+// --base flag parsing: leading position, both forms, both paths; the git
+// delivery section renders the explicit base vs the default-main rule.
+steered.length = 0;
+const baseRun = await commandDef.handler({ agent: fakeAgent, rawInput: '--base release/1.2 Add CSV export', attachments: [], signal: undefined });
+eq('host: --base interactive run succeeds', baseRun.kind, 'success');
+eq('host: --base success text names the PR base', baseRun.text?.includes('Git delivery targets PR base release/1.2'), true);
+const basePrompt = steered[0]?.content?.find((block) => block?.type === 'text')?.text ?? '';
+check('host: --base renders the explicit base into the prompt\'s git section',
+	basePrompt.includes('## Git delivery (automatic)')
+	&& basePrompt.includes('The PR base branch is `release/1.2`')
+	&& basePrompt.includes('explicit --base choice'));
+check('host: baseless prompt renders the default-main rule instead',
+	steeredText.includes('## Git delivery (automatic)')
+	&& steeredText.includes('defaults to `main`')
+	&& !steeredText.includes('The PR base branch is `release/1.2`'));
+const baseEqRun = await commandDef.handler({ agent: fakeAgent, rawInput: '--base=develop Fix the throttle', attachments: [], signal: undefined });
+eq('host: --base=<branch> single-token form accepted', [
+	baseEqRun.kind,
+	(steered.at(-1)?.content?.find((block) => block?.type === 'text')?.text ?? '').includes('The PR base branch is `develop`'),
+], ['success', true]);
+const missingBase = await commandDef.handler({ agent: fakeAgent, rawInput: '--base', attachments: [], signal: undefined });
+check('host: --base without a value is a usage error naming the flag',
+	missingBase.kind === 'error' && missingBase.text?.includes('--base needs a branch name'));
+const missingBaseEq = await commandDef.handler({ agent: fakeAgent, rawInput: '-q --base= ', attachments: [], signal: undefined });
+eq('host: empty --base= form is a usage error too', missingBaseEq.kind, 'error');
+const queueBaseRun = await commandDef.handler({ agent: fakeAgent, rawInput: '-q --base release/9 Ship the exporter', attachments: [], signal: undefined });
+eq('host: -q --base enqueue succeeds and names the base', [
+	queueBaseRun.kind, queueBaseRun.text?.includes('PR base: release/9'),
+], ['success', true]);
+const queueBaseDirective = steered.at(-1)?.content?.find((block) => block?.type === 'text')?.text ?? '';
+check('host: the enqueue directive carries the flag base and the JSON base contract',
+	queueBaseDirective.includes('PR base branch: release/9')
+	&& queueBaseDirective.includes('"base"'));
 
 // Queue store: the durable state machine over a temp dir. (The autoOpenTab
 // re-apply runs at the very end — a second apply would register a second
@@ -800,8 +881,29 @@ await store.remove(itemA.id);
 await store.remove(itemC.id);
 eq('host: queue: emptying the queue resets nextId to 1',
 	[(await store.snapshot()).items.length, (await store.snapshot()).nextId], [0, 1]);
-eq('host: queue: the next enqueue after an emptied queue is q1 again',
-	(await store.enqueue({ request: 'Numbering restart', workspace: '/repo/a', scopes: [] })).id, 'q1');
+const restartItem = await store.enqueue({ request: 'Numbering restart', workspace: '/repo/a', scopes: [] });
+eq('host: queue: the next enqueue after an emptied queue is q1 again', restartItem.id, 'q1');
+eq('host: queue: enqueue without base or delivery normalizes both to null',
+	[restartItem.base, restartItem.delivery], [null, null]);
+// Delivery metadata: markSucceeded records the run's delivery line outcome;
+// enqueue stores the item's PR base branch for the worker's git delivery.
+await store.markRunning(restartItem.id, 'worker-zzzz');
+await store.markSucceeded(restartItem.id, { branch: 'feature/numbering', pr: 'https://github.com/org/repo/pull/9' });
+eq('host: queue: markSucceeded records the normalized delivery',
+	(await store.find(restartItem.id))?.delivery,
+	{ branch: 'feature/numbering', pr: 'https://github.com/org/repo/pull/9', note: null });
+const pushOnlyItem = await store.enqueue({ request: 'Push only run', workspace: '/repo/a', scopes: [], base: 'develop' });
+await store.markRunning(pushOnlyItem.id, 'worker-yyyy');
+await store.markSucceeded(pushOnlyItem.id, { branch: 'chore/deps', note: 'pushed, no PR — gh missing' });
+eq('host: queue: enqueue stores the base branch; a note-only delivery records cleanly', [
+	(await store.find(pushOnlyItem.id))?.base,
+	(await store.find(pushOnlyItem.id))?.delivery,
+], ['develop', { branch: 'chore/deps', pr: null, note: 'pushed, no PR — gh missing' }]);
+const garbageItem = await store.enqueue({ request: 'Garbage delivery', workspace: '/repo/a', scopes: [] });
+await store.markRunning(garbageItem.id, 'worker-xxxx');
+await store.markSucceeded(garbageItem.id, 'not-an-object');
+eq('host: queue: a non-object delivery normalizes to null (never throws)',
+	(await store.find(garbageItem.id))?.delivery, null);
 
 // ---------------------------------------------------------------------------
 // Enqueue listener + queue command grammar (against the temp DSH home).
@@ -909,6 +1011,7 @@ const workerItem = await runtime.enqueueAndPump({
   workspace: orchWorkspace,
   scopes: ['src/'],
   clarifications: [{ question: 'Cap where?', answer: 'At injection.' }],
+  base: 'develop',
 });
 await tick();
 await tick();
@@ -930,6 +1033,9 @@ check('host: orchestrator: steered prompt is the autonomous worker prompt',
   workerPrompt.startsWith('Factory queue q1: Retention')
   && workerPrompt.includes('BINDING acceptance inputs')
   && workerPrompt.includes('Cap where?'));
+check('host: orchestrator: worker prompt carries the git section and the item\'s PR base',
+  workerPrompt.includes('## Git delivery (automatic)')
+  && workerPrompt.includes('The PR base branch is `develop`'));
 const failedWorker = await orchStore.find(workerItem.id);
 eq('host: orchestrator: zero-event worker fails loudly (the dead-turn bug)',
   [failedWorker?.status, failedWorker?.failureReason],
@@ -940,6 +1046,7 @@ boardForWorker = () => ({
   running: false,
   runCount: 0,
   plan: null,
+  delivery: { branch: 'feature/retention', pr: 'https://github.com/org/repo/pull/7', note: null },
   lastLine: '[factory] phase 9/9 evaluate: done',
   phases: Array.from({ length: 9 }, (_, index) => ({ n: index + 1, key: `p${index}`, status: 'done', text: null })),
 });
@@ -955,6 +1062,13 @@ check('host: orchestrator: resumed worker gets the retry notice and stays autono
   && retriedPrompt.includes('RESUMED after a failed attempt'));
 const retriedItem = await orchStore.find(workerItem.id);
 eq('host: orchestrator: completing worker settles succeeded', retriedItem?.status, 'succeeded');
+eq('host: orchestrator: the settled item records the worker\'s delivery line',
+  retriedItem?.delivery,
+  { branch: 'feature/retention', pr: 'https://github.com/org/repo/pull/7', note: null });
+const orchStatusText = await runtime.statusText();
+check('host: /factory queue text surfaces the branch and the PR link',
+  orchStatusText.includes('branch feature/retention')
+  && orchStatusText.includes('https://github.com/org/repo/pull/7'), { orchStatusText });
 
 // The RESUME path (the worker's live agent is gone — restart or disposal):
 // the resume call carries a setup that re-mounts the preset the session
@@ -1059,6 +1173,10 @@ fireSelEvent(headerSession, 2, '[factory] enqueue: {"request":"Header selection"
 fireSelEvent(pendingSession, 3, '[factory] enqueue: {"request":"Effort override","summary":"SelEffort","scopes":[],"clarifications":[],"reasoningEffort":"max"}');
 // Invalid JSON fields are dropped leniently (wrong types and blanks).
 fireSelEvent(pendingSession, 4, '[factory] enqueue: {"request":"Invalid override","summary":"SelInvalid","scopes":[],"clarifications":[],"provider":7,"model":"","reasoningEffort":null}');
+// The enqueue JSON's "base" field lands on the queue item; invalid values
+// are dropped leniently the same way (the PR base for git delivery).
+fireSelEvent(pendingSession, 5, '[factory] enqueue: {"request":"Base via JSON","summary":"SelBase","scopes":[],"clarifications":[],"base":"develop"}');
+fireSelEvent(pendingSession, 6, '[factory] enqueue: {"request":"Invalid base","summary":"SelBadBase","scopes":[],"clarifications":[],"base":7}');
 await tick();
 await tick();
 const selStore = host.createQueueStore({ dir: join(selHome, 'factory-queue') });
@@ -1076,6 +1194,25 @@ eq('host: JSON per-field override wins (effort only, captured route kept)',
 	selBy('SelEffort'), { provider: 'p-pending', model: 'm-pending', reasoningEffort: 'max' });
 eq('host: invalid JSON-named fields are dropped, captured selection kept',
 	selBy('SelInvalid'), { provider: 'p-pending', model: 'm-pending', reasoningEffort: 'low' });
+// The enqueue JSON's "base" field lands on the item; an invalid value is
+// dropped leniently the same way. The listener settles asynchronously
+// through ITS OWN runtime store; selSnap above is a cached first load, so
+// read fresh stores per poll until the item lands (safe: no item is ever
+// `running` in this fixture — no agents service — so a fresh store's
+// crash-recovery pass never rewrites anything).
+const waitForSelItem = async (summary) => {
+	for (let attempt = 0; attempt < 100; attempt += 1) {
+		const snap = await host.createQueueStore({ dir: join(selHome, 'factory-queue') }).snapshot();
+		const found = snap.items.find((item) => item.summary === summary);
+		if (found !== undefined) return found;
+		await tick();
+	}
+	return undefined;
+};
+const selBaseItem = await waitForSelItem('SelBase');
+eq('host: enqueue JSON "base" lands on the queue item', selBaseItem?.base, 'develop');
+const selBadBaseItem = await waitForSelItem('SelBadBase');
+eq('host: invalid enqueue JSON base is dropped leniently', selBadBaseItem?.base, null);
 
 // Orchestrator: workers receive the snapshot; legacy and absent selections
 // run on the full default (effort included); an unavailable captured model
@@ -1123,6 +1260,8 @@ eq('host: orchestrator: both model-inheritance workers settle succeeded', [
 	(await selOrchStore.find(inheritItem.id))?.status,
 	(await selOrchStore.find(legacyItem.id))?.status,
 ], ['succeeded', 'succeeded']);
+check('host: orchestrator: baseless worker prompt renders the default-main rule',
+	(selLog.followups[0]?.message?.content?.[0]?.text ?? '').includes('defaults to `main`'));
 // A snapshot worker that fails keeps its snapshot; retry RESUMES the same
 // session under that same enqueue-time selection.
 fakeSeq = 0;
@@ -1254,12 +1393,13 @@ hostServices.sessionProjections = {
       running: false,
       runCount: 0,
       plan: null,
+      delivery: { branch: 'feature/route-retry', pr: 'https://github.com/org/repo/pull/21', note: null },
       lastLine: '[factory] phase 9/9 evaluate: done',
       phases: Array.from({ length: 9 }, (_, index) => ({ n: index + 1, key: `p${index}`, status: 'done', text: null })),
     }
     : undefined),
 };
-fireSessionEvent(assistantEvent(9, '[factory] enqueue: {"request":"Route retry target","summary":"Route retry","scopes":["route/"],"clarifications":[]}'));
+fireSessionEvent(assistantEvent(9, '[factory] enqueue: {"request":"Route retry target","summary":"Route retry","scopes":["route/"],"clarifications":[],"base":"develop"}'));
 const makeRes = () => ({
   status: 0,
   body: '',
@@ -1316,6 +1456,11 @@ eq('host: route: POST retry re-queues, the worker reruns, and the halt lifts', [
 	routeAfterSnap.items.find((item) => item.id === routeItemSnap?.id)?.status,
 	routeAfterSnap.halted,
 ], [200, 'succeeded', false]);
+const routeDelivered = routeAfterSnap.items.find((item) => item.id === routeItemSnap?.id);
+eq('host: route: GET exposes the item base and the delivery metadata', [
+	routeDelivered?.base,
+	routeDelivered?.delivery,
+], ['develop', { branch: 'feature/route-retry', pr: 'https://github.com/org/repo/pull/21', note: null }]);
 eq('host: route: GET stats count every item and carry running-vs-cap', [
 	routeAfterSnap.stats?.queued + routeAfterSnap.stats?.running
 		+ routeAfterSnap.stats?.succeeded + routeAfterSnap.stats?.failed,

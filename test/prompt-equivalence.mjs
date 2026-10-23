@@ -77,6 +77,11 @@ const scenarios = [
       { question: 'Default budget?', answer: '8192 characters.' },
     ],
   }],
+  ['worker-base', base, 'Port the exporter to v2', {
+    autonomous: true,
+    titleHint: 'Factory queue q2: exporter v2',
+    base: 'release/1.2',
+  }],
 ];
 
 const out = [];
