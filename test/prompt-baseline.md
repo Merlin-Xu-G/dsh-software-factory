@@ -55,6 +55,7 @@ This pipeline delivers through git: no human will branch, commit, push, or open 
 
 - Restate the user request in your own words: goal, deliverables, constraints, and the environment it must run in.
 - Classify this request's git delivery prefix — feature/ (new capability), bugfix/ (defect fix), hotfix/ (urgent production fix), chore/ (tooling, dependencies, CI, refactoring), docs/ (documentation only) — and derive a short kebab-case slug from the request, and state both in the restatement: they name this run's working branch (see the Git delivery section).
+- Git delivery is non-negotiable: NEVER ask, suggest, or mine workspace rules (AGENTS.md, README, project docs) for anything about git delivery — branch, commit, push, PR, or PR base. The PR base is not a clarification dimension; never ask about it. The ONLY opt-out is the user explicitly refusing delivery in their own words, unprompted ('no PR', 'don't commit', 'report-only', 'no push') — then the whole delivery is skipped (no branch, commit, push, or PR) with the delivery-line note 'git delivery declined by request'. Ambiguous or partial phrasing delivers fully.
 - Before planning ANYTHING, interview the user with the ask_user_question tool until the request is materially clear. Cover every one of these dimensions:
   - functional scope and explicit non-goals
   - data model and storage location
@@ -180,6 +181,7 @@ This pipeline delivers through git: no human will branch, commit, push, or open 
 
 - Restate the user request in your own words: goal, deliverables, constraints, and the environment it must run in.
 - Classify this request's git delivery prefix — feature/ (new capability), bugfix/ (defect fix), hotfix/ (urgent production fix), chore/ (tooling, dependencies, CI, refactoring), docs/ (documentation only) — and derive a short kebab-case slug from the request, and state both in the restatement: they name this run's working branch (see the Git delivery section).
+- Git delivery is non-negotiable: NEVER ask, suggest, or mine workspace rules (AGENTS.md, README, project docs) for anything about git delivery — branch, commit, push, PR, or PR base. The PR base is not a clarification dimension; never ask about it. The ONLY opt-out is the user explicitly refusing delivery in their own words, unprompted ('no PR', 'don't commit', 'report-only', 'no push') — then the whole delivery is skipped (no branch, commit, push, or PR) with the delivery-line note 'git delivery declined by request'. Ambiguous or partial phrasing delivers fully.
 - Before planning ANYTHING, interview the user with the ask_user_question tool until the request is materially clear. Cover every one of these dimensions:
   - functional scope and explicit non-goals
   - data model and storage location
@@ -311,6 +313,7 @@ This pipeline delivers through git: no human will branch, commit, push, or open 
 
 - Restate the user request in your own words: goal, deliverables, constraints, and the environment it must run in.
 - Classify this request's git delivery prefix — feature/ (new capability), bugfix/ (defect fix), hotfix/ (urgent production fix), chore/ (tooling, dependencies, CI, refactoring), docs/ (documentation only) — and derive a short kebab-case slug from the request, and state both in the restatement: they name this run's working branch (see the Git delivery section).
+- Git delivery is non-negotiable: NEVER ask, suggest, or mine workspace rules (AGENTS.md, README, project docs) for anything about git delivery — branch, commit, push, PR, or PR base. The PR base is not a clarification dimension; never ask about it. The ONLY opt-out is the user explicitly refusing delivery in their own words, unprompted ('no PR', 'don't commit', 'report-only', 'no push') — then the whole delivery is skipped (no branch, commit, push, or PR) with the delivery-line note 'git delivery declined by request'. Ambiguous or partial phrasing delivers fully.
 - Before planning ANYTHING, interview the user with the ask_user_question tool until the request is materially clear. Cover every one of these dimensions:
   - functional scope and explicit non-goals
   - data model and storage location
@@ -429,6 +432,7 @@ This pipeline delivers through git: no human will branch, commit, push, or open 
 
 - Restate the user request in your own words: goal, deliverables, constraints, and the environment it must run in.
 - Classify this request's git delivery prefix — feature/ (new capability), bugfix/ (defect fix), hotfix/ (urgent production fix), chore/ (tooling, dependencies, CI, refactoring), docs/ (documentation only) — and derive a short kebab-case slug from the request, and state both in the restatement: they name this run's working branch (see the Git delivery section).
+- Git delivery is non-negotiable: NEVER ask, suggest, or mine workspace rules (AGENTS.md, README, project docs) for anything about git delivery — branch, commit, push, PR, or PR base. The PR base is not a clarification dimension; never ask about it. The ONLY opt-out is the user explicitly refusing delivery in their own words, unprompted ('no PR', 'don't commit', 'report-only', 'no push') — then the whole delivery is skipped (no branch, commit, push, or PR) with the delivery-line note 'git delivery declined by request'. Ambiguous or partial phrasing delivers fully.
 - Before planning ANYTHING, interview the user with the ask_user_question tool until the request is materially clear. Cover every one of these dimensions:
   - functional scope and explicit non-goals
   - data model and storage location
@@ -573,6 +577,7 @@ This pipeline delivers through git: no human will branch, commit, push, or open 
 
 - Restate the user request in your own words: goal, deliverables, constraints, and the environment it must run in.
 - Classify this request's git delivery prefix — feature/ (new capability), bugfix/ (defect fix), hotfix/ (urgent production fix), chore/ (tooling, dependencies, CI, refactoring), docs/ (documentation only) — and derive a short kebab-case slug from the request, and state both in the restatement: they name this run's working branch (see the Git delivery section).
+- Git delivery is non-negotiable: NEVER ask, suggest, or mine workspace rules (AGENTS.md, README, project docs) for anything about git delivery — branch, commit, push, PR, or PR base. The PR base is not a clarification dimension; never ask about it. The ONLY opt-out is the user explicitly refusing delivery in their own words, unprompted ('no PR', 'don't commit', 'report-only', 'no push') — then the whole delivery is skipped (no branch, commit, push, or PR) with the delivery-line note 'git delivery declined by request'. Ambiguous or partial phrasing delivers fully.
 - Derive the acceptance criteria you will evaluate against in phase 9, and keep them visible in the transcript.
 - Only if the request is materially ambiguous, ask the user now (ask_user_question); otherwise proceed without questions.
 
