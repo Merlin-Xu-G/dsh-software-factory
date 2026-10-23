@@ -304,8 +304,10 @@ with an empty state while no run is active.
 - **Styling**: theme tokens only (`--dsw-alias-*`, `--dsw-radius-*`,
   `--dsw-font-mono`); React from the browser module table; no Harness
   client package is imported.
-- **Visibility**: client text is English constants + a Chinese dictionary
-  registered with the client locale service (namespace `softwareFactory`).
+- **Localization**: the client registers two key-identical dictionaries
+  with the client locale service under the `softwareFactory` namespace —
+  Chinese as the source of truth and an English mirror — and the user's
+  client language picks the wording.
 
 ## The factory queue
 
@@ -317,6 +319,8 @@ session, executed by **worker sessions** the plugin itself starts:
 /factory -q --base release/1.2 Ship the port  # PR base for the worker
 /factory queue                                # queue status text
 /factory queue ack [id]                       # acknowledge a halt and resume
+/factory queue retry <id>                     # re-queue a failed item (resumes its worker)
+/factory queue rm <id>                        # remove an item (alias: remove)
 ```
 
 - **Grill at enqueue**: `-q` first asks one structural batch (target
@@ -387,9 +391,20 @@ session, executed by **worker sessions** the plugin itself starts:
   `/plugins/@local/dsh-software-factory/queue.json` every 2s ONLY while the
   panel is open (no badge, no background traffic) and lists every item —
   status, scopes, failure reason, an Open button jumping to the worker
-  session, and a Retry button on failed rows — under a one-line stats strip
-  (`2/3 running · 5 queued · 1 failed`) computed from the route's `stats`
-  fields (per-status counts plus running-vs-cap). GET is the read model; the
+  session, a Retry button on failed rows, and a Remove button on every row
+  (the CLI equivalent is `/factory queue rm <id>`) — under a one-line stats
+  strip (`2/3 running · 5 queued · 1 failed`) computed from the route's
+  `stats` fields (per-status counts plus running-vs-cap). A **Clean**
+  control behind a two-step inline confirm (arm → Confirm) sweeps the
+  finished rows — succeeded AND failed, never queued/running — removing
+  queue rows only (worker sessions stay), which also lifts a halt caused
+  by a swept failure; it reuses the per-item remove action, so an enqueue
+  racing the sweep simply lands between two removes. Item ids (`q1`,
+  `q2`, …) are never renumbered: removing rows keeps the survivors' ids,
+  and numbering restarts at `q1` only when a removal empties the queue
+  (the Clean sweep lands there too) — a live row surviving a sweep
+  correctly keeps the counter going. Clean is panel-only: there is no CLI
+  clean command. GET is the read model; the
   ack/retry actions POST with a custom `x-dsh-factory-action` header (a
   non-simple header forces a CORS preflight this host never answers, so
   other origins cannot forge a POST). Worker verdicts come from each
@@ -402,7 +417,7 @@ session, executed by **worker sessions** the plugin itself starts:
 ## Design notes
 
 - **Command registration**: `ctx.commands.register({ name: 'factory',
-  description, input: { hint: '<request>', attachments: true },
+  description, input: { hint: '[-q|--queue] [--base <branch>] <request> | queue [ack [id]]', attachments: true },
   recordInput: false, handler })` — the `@deepseek-ai/dsh-commands`
   contract. `recordInput: false` because the steered pipeline message already
   carries the request verbatim in the session log. The handler is async
@@ -443,9 +458,12 @@ session, executed by **worker sessions** the plugin itself starts:
   output echoing the prompt can never be misparsed. Its state and wire
   schemas are dependency-free `{ parse }` facades — the registry only calls
   `schema.parse(...)`. Fold semantics: entering phase n closes earlier open
-  phases as done; `skip` in the text marks the phase skipped;
-  `fail`/`error`/`blocked` marks it failed; a phase-8 line ends the run; a
-  later phase-1 line starts a fresh run; `command/run` events naming this
+  phases as done; a LEAVE line's leading verdict word alone decides its
+  status (`fail`/`failed` → failed, `skip`/`skipped` → skipped, otherwise
+  `done` when the line is phase 9's or the word is `pass`/`passed`/`done`;
+  anything else stays active — the v6 contract); the run settles when
+  phase 9 reaches a terminal status; a later phase-1 line starts a fresh
+  run; `command/run` events naming this
   command bump the monotonic `runCount` (the auto-open signal), the wire
   view carries the row config's `autoOpenTab` switch as `autoOpen` so the
   client honors the same declarative configuration, `todo/write`
@@ -471,7 +489,7 @@ cordis.patch.yml    insert row `software-factory`
 index.js            Host half entry: re-exports Config + parser, wires the
                     command, projection, queue (store + runtime + route), and
                     the enqueue listener fibers
-lib/phases.js       pipeline identity: ordered phases, statuses, narration pattern
+lib/phases.js       pipeline identity: ordered phases, statuses, status/delivery line patterns
 lib/config.js       plugin row Config (~standard facade, unknown-key rejection, deploy gate)
 lib/projection.js   `factory` session projection: fold, schema facades, wire view
 lib/project-file.js `.factory.yml` parser + workspace-root reader + override merge
@@ -486,4 +504,5 @@ locale/zh.json      display metadata (Chinese)
 icon.svg            plugin icon
 README.md           this file
 AGENTS.md           agent conventions for this repository
+test/               behavioral suite (npm test): smoke.mjs + prompt-equivalence.mjs
 ```
