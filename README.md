@@ -394,7 +394,10 @@ session, executed by **worker sessions** the plugin itself starts:
   non-simple header forces a CORS preflight this host never answers, so
   other origins cannot forge a POST). Worker verdicts come from each
   worker's own `factory` projection board, read host-side — no new status
-  channel.
+  channel: a run succeeds when no phase failed and its final phase reached
+  a terminal verdict — `done`, or `skipped` (a workspace whose
+  `.factory.yml` disables the trailing phases legitimately ends its board
+  with the phase-9 `skip (disabled by configuration)` leave line).
 
 ## Design notes
 

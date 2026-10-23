@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-software-factory",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "private": true,
   "type": "module",
   "description": "Adds the /factory slash command: a managed 9-phase software-delivery pipeline (capture, plan, implement, review, guardrails, test, deploy, regression, evaluate) driven through DSH-native machinery, with clarify-first grilling, a right-sidebar progress tab, a global worker queue observed in a left-sidebar panel in the Web client, and always-on git delivery: every run branches (gitflow name), commits in /draft-commit format, and pushes + opens a ready-for-review PR (/draft-pr format) onto a --base-selectable base (default main).",
